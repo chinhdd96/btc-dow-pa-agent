@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+runtime_state.json
+.DS_Store
+generated/history/
+generated/paper_account.json
+generated/runtime_state.json
