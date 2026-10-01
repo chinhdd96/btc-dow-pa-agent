@@ -1,0 +1,15 @@
+{
+  "updated_at": "2026-10-01T07:21:26Z",
+  "has_high_impact_news_next_24h": false,
+  "news_risk_level": "MEDIUM",
+  "summary": "Donald Trump công bố sẽ áp dụng thêm thuế quan 10% lên Trung Quốc, làm tăng lo ngại về thương mại và giảm khẩu vị rủi ro. Giá Bitcoin giảm xuống khoảng 94,000 USD trong bối cảnh thị trường lo ngại tác động tiêu cực của thuế quan. Các chỉ số chứng khoán châu Á cũng giảm mạnh, tăng áp lực bán trên thị trường crypto.",
+  "key_events": [
+    "Trump công bố thuế quan 10% mới đối với Trung Quốc",
+    "Giá Bitcoin tụt xuống $94k do lo ngại thuế quan"
+  ],
+  "risk_instruction": "Giữ bias bán, nâng min_score lên 8.5, HOLD trong 30 phút sau tin, giãn SL thêm 200 điểm để bảo vệ trước biến động.",
+  "actionable_rules": [
+    "CẤM vào lệnh mua nếu giá BTC/USDT vượt qua mức kháng cự ngay sau tin thuế quan.",
+    "CHỈ giữ bias bán nếu khối lượng giảm và RSI dưới 45 trong 15 phút liên tục."
+  ]
+}
