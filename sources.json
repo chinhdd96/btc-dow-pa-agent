@@ -1,0 +1,24 @@
+{
+  "youtube_channels": [
+    {
+      "name": "Crypto Price Action Sample",
+      "channel_id": "UCY2qt3dw7MQYI43PcD5paLQ"
+    }
+  ],
+  "rss_feeds": [
+    {
+      "name": "CoinDesk",
+      "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    },
+    {
+      "name": "CoinTelegraph",
+      "url": "https://cointelegraph.com/rss"
+    },
+    {
+      "name": "Investing Economic Calendar",
+      "url": "https://www.investing.com/rss/news_285.rss"
+    }
+  ],
+  "max_videos_per_channel": 3,
+  "max_rss_items": 20
+}
