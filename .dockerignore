@@ -1,0 +1,14 @@
+.env
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.log
+.git
+.gitignore
+runtime_state.json
+.DS_Store
+HUONG_DAN.md
+knowledge/README.md
