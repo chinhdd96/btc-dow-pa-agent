@@ -1,0 +1,14 @@
+{
+  "system_stats": {
+    "total_trades": 0,
+    "win_rate": 0.0,
+    "consecutive_losses": 0,
+    "current_min_score": 6.0
+  },
+  "lessons_by_regime": {
+    "REGIME_UPTREND": [],
+    "REGIME_DOWNTREND": [],
+    "REGIME_SIDEWAY_CHOP": [],
+    "REGIME_HIGH_VOLATILITY_NEWS": []
+  }
+}
