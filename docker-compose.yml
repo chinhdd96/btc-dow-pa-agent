@@ -1,0 +1,22 @@
+services:
+  pa-agent:
+    build: .
+    container_name: pa_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist state
+      - ./generated:/app/generated
+      - ./memory.json:/app/memory.json
+      - ./sources.json:/app/sources.json
+      - ./knowledge:/app/knowledge:ro
+      # Always use latest local code (tránh kẹt image cũ)
+      - ./modules:/app/modules:ro
+      - ./config.py:/app/config.py:ro
+      - ./main.py:/app/main.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
