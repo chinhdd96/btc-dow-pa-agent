@@ -22,6 +22,15 @@ REGIME_VI = {
     "REGIME_UPTREND": "Xu hướng tăng",
     "REGIME_DOWNTREND": "Xu hướng giảm",
     "REGIME_SIDEWAY_CHOP": "Đi ngang / chop",
+    "REGIME_RANGE": "Range",
+    "REGIME_RANGE_BREAKOUT_ATTEMPT": "Range — thử breakout",
+    "REGIME_RANGE_BREAKOUT_CONFIRMED": "Range — breakout xác nhận",
+    "REGIME_RANGE_FAILED_BREAKOUT": "Range — breakout thất bại",
+    "REGIME_RANGE_RETEST": "Range — retest",
+    "REGIME_RANGE_REJECTION": "Range — rejection",
+    "REGIME_RANGE_CONSOLIDATION": "Range — consolidation",
+    "REGIME_UPTREND_RETEST": "Uptrend — retest",
+    "REGIME_DOWNTREND_RETEST": "Downtrend — retest",
     "REGIME_HIGH_VOLATILITY_NEWS": "Biến động mạnh / tin tức",
 }
 
