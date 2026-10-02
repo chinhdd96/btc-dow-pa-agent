@@ -32,6 +32,23 @@ DEFAULT_MEMORY: dict[str, Any] = {
 }
 
 
+def _memory_regime_bucket(regime: str) -> str:
+    """Map rich REGIME_* labels onto the 4 memory buckets."""
+    r = (regime or "").upper()
+    if not r.startswith("REGIME_"):
+        r = f"REGIME_{r}" if r else "REGIME_SIDEWAY_CHOP"
+    if "HIGH_VOL" in r or "NEWS" in r:
+        return "REGIME_HIGH_VOLATILITY_NEWS"
+    if "DOWNTREND" in r or "TREND_DOWN" in r:
+        return "REGIME_DOWNTREND"
+    if "UPTREND" in r or "TREND_UP" in r:
+        return "REGIME_UPTREND"
+    if r in VALID_REGIMES:
+        return r
+    # RANGE / SIDEWAY / breakout-state labels → chop bucket
+    return "REGIME_SIDEWAY_CHOP"
+
+
 class MemoryManager:
     def __init__(self, path: str | None = None) -> None:
         self.path = Path(path or config.PATHS["MEMORY"])
@@ -80,7 +97,7 @@ class MemoryManager:
 
     def get_lessons_for_regime(self, regime: str, top_n: int = 5) -> list[dict[str, Any]]:
         data = self._read()
-        key = regime if regime in VALID_REGIMES else "REGIME_SIDEWAY_CHOP"
+        key = _memory_regime_bucket(regime)
         lessons = list(data["lessons_by_regime"].get(key, []))
         lessons.sort(key=lambda x: int(x.get("weight", 1)), reverse=True)
         return lessons[:top_n]
@@ -126,7 +143,7 @@ class MemoryManager:
         weight: int = 1,
     ) -> None:
         data = self._read()
-        key = regime if regime in VALID_REGIMES else "REGIME_SIDEWAY_CHOP"
+        key = _memory_regime_bucket(regime)
         data["lessons_by_regime"][key].append(
             {
                 "regime": key,
