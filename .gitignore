@@ -9,3 +9,4 @@ runtime_state.json
 generated/history/
 generated/paper_account.json
 generated/runtime_state.json
+generated/decision_history.jsonl
