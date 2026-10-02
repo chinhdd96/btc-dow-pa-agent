@@ -55,7 +55,6 @@ ZOOM PA:
 
 GIÁ HIỆN TẠI: {current_price}
 VỊ THẾ HIỆN TẠI: {current_position}
-ĐIỂM TỐI THIỂU ĐỂ VÀO LỆNH: {min_score_required}
 
 QUY TẮC PHÂN TÍCH:
 
@@ -70,69 +69,52 @@ QUY TẮC PHÂN TÍCH:
    Hãy xác định timeframe nào đang dẫn dắt và timeframe nào đang xác nhận
    hoặc mâu thuẫn.
 
-4. Không được máy móc:
-   UPTREND = BUY
-   DOWNTREND = SELL
-   SIDEWAY = HOLD
+4. TÁCH CẤU TRÚC VÀ TRẠNG THÁI THỊ TRƯỜNG:
 
-   Nếu thị trường đang chuyển trạng thái, hãy phát hiện:
-   breakout, reversal, trend exhaustion, failed breakout hoặc regime transition.
+Cấu trúc chính chỉ gồm: UPTREND / DOWNTREND / RANGE.
+
+Nhưng RANGE không đồng nghĩa HOLD. Hãy xác định thêm trạng thái:
+BREAKOUT_ATTEMPT / BREAKOUT_CONFIRMED / FAILED_BREAKOUT / RETEST / REJECTION / CONSOLIDATION.
+
+Không máy móc:
+UPTREND = BUY
+DOWNTREND = SELL
+RANGE = HOLD.
+
+Khi giá gần biên range hoặc Key Level, hãy xem đó là DECISION POINT và tìm dấu hiệu:
+breakout, acceptance, rejection, failed breakout, retest, liquidity sweep,
+compression, expansion, momentum và thay đổi cấu trúc.
+
+Không cần pinbar/engulfing mới được coi là Price Action.
+
+Không BUY chỉ vì vừa breakout; ưu tiên breakout + acceptance/retest.
+Không SELL chỉ vì bị từ chối một lần; cần rejection/failed breakout + xác nhận cấu trúc.
+
+Nếu 1D tăng nhưng 4H range → mô tả "bullish bias + 4H consolidation",
+không gọi toàn bộ thị trường là SIDEWAY.
 
 5. Luôn đánh giá:
-   - Giá đang ở đâu trong cấu trúc?
-   - Đang gần Support/Resistance hay giữa range?
-   - Có Price Action xác nhận chưa?
-   - Có dấu hiệu breakout/retest/failure không?
-   - Điều gì đang ủng hộ thesis?
-   - Điều gì có thể khiến thesis sai?
-   - Entry, SL, TP có hợp lý và R:R đủ tốt không?
+- Giá đang ở đâu trong cấu trúc?
+- Đang ở Key Level hay giữa range?
+- Thị trường đang tích lũy, breakout hay rejection?
+- Có TRIGGER + INVALIDATION + R:R hợp lý chưa?
+- Điều gì ủng hộ và điều gì làm thesis sai?
 
-6. Có thể tham khảo MEMORY nhưng không được để memory hoặc lý thuyết
-   override dữ liệu thị trường hiện tại.
+6. MEMORY chỉ là tham khảo. Dữ liệu hiện tại luôn được ưu tiên.
 
-7. Không cần cố giao dịch.
-   Nếu chưa có edge rõ ràng → HOLD.
-   Nếu cần chờ breakout/retest/pullback → HOLD và nêu rõ điều kiện chờ.
-   setup_score < {min_score_required} → HOLD.
+7. Không ép giao dịch. Nếu chưa có edge rõ → HOLD và ghi rõ điều kiện chờ:
+BREAKOUT / RETEST / REJECTION / PULLBACK.
 
-8. Chỉ BUY/SELL khi có:
-   THESIS + KEY LEVEL + PRICE ACTION/TRIGGER + INVALIDATION + R:R hợp lý.
+Chỉ BUY/SELL khi có:
+THESIS + KEY LEVEL + TRIGGER + INVALIDATION + R:R.
 
-QUAN TRỌNG:
-
-Không coi SIDEWAY = không có cơ hội.
-
-Nếu thị trường sideway nhưng đang tiến sát biên range,
-hãy xác định đó là:
-- RANGE
-- BREAKOUT_ATTEMPT
-- FAILED_BREAKOUT
-- BREAKOUT_CONFIRMED
-- RETEST
-
-Không chỉ tìm các mẫu nến cổ điển như pinbar/engulfing/inside bar.
-Price Action phải bao gồm cả:
-breakout, acceptance, rejection, failed breakout,
-retest, liquidity sweep, compression và expansion.
-
-Đặc biệt phân biệt:
-"chạm kháng cự"
-với
-"đang xây dựng breakout".
-
-Không BUY chỉ vì breakout vừa xảy ra.
-Ưu tiên breakout + acceptance/retest.
-
-Không SELL chỉ vì bị từ chối một lần.
-Cần rejection/failed breakout và cấu trúc xác nhận.
-
-Nếu 1D có bias tăng nhưng 4H đang range:
-hãy mô tả là "bullish bias + 4H consolidation",
-không tự động gọi toàn bộ thị trường là SIDEWAY.
+setup_score là đánh giá chất lượng setup, không phải điều kiện bắt buộc để BUY/SELL.
+Tầng Python chịu trách nhiệm kiểm tra min_score, risk và execution.
 
 LƯU Ý EXECUTION:
 Tầng Python có thể chặn lệnh ngược primary_bias 1D hoặc khi primary SIDEWAY.
 Vẫn mô tả transition/edge trung thực; nếu bị chặn thì action=HOLD và giải thích trong reasoning.
+Ngưỡng điểm tối thiểu hiện tại (Python): {min_score_required} — chỉ để tham chiếu, không tự ép HOLD vì điểm.
 
 ĐIỂM QUAN TRỌNG:
 Hãy suy nghĩ như một trader thực chiến:
@@ -146,11 +128,14 @@ OUTPUT:
 Chỉ trả về đúng 1 JSON object, không markdown, không ```.
 Bắt đầu bằng {{ và kết thúc bằng }}.
 action chỉ nhận: BUY | SELL | HOLD.
+market_regime = REGIME_{{CẤU_TRÚC}}_{{TRẠNG_THÁI}} khi có trạng thái
+(ví dụ REGIME_RANGE_BREAKOUT_ATTEMPT, REGIME_UPTREND_RETEST),
+hoặc REGIME_UPTREND / REGIME_DOWNTREND / REGIME_RANGE nếu chưa rõ trạng thái.
 Các trường mô tả viết bằng tiếng Việt.
 
 FORMAT:
 {{
-  "market_regime": "REGIME_UPTREND",
+  "market_regime": "REGIME_RANGE_BREAKOUT_ATTEMPT",
   "dow_structure_analysis": "Mô tả cấu trúc Dow bằng tiếng Việt",
   "price_action_signal": "Mô tả tín hiệu PA bằng tiếng Việt",
   "market_location": "Giá đang ở đâu trong cấu trúc (tiếng Việt)",
@@ -610,11 +595,14 @@ class LLMAgent:
 
         system = (
             "Bạn là Senior Crypto Quant Trader Dow/PA. Chỉ trả về 1 JSON hợp lệ, "
-            "không markdown. Phân tích thực chiến, không map máy móc bias→action. "
-            "Các trường mô tả (dow_structure_analysis, price_action_signal, "
-            "market_location, reasoning) PHẢI viết bằng tiếng Việt. "
-            "Chỉ BUY/SELL khi có thesis+level+trigger+invalidation+R:R và "
-            f"setup_score>={min_score_required}. Không nói thiếu dữ liệu."
+            "không markdown. Phân tích thực chiến: tách cấu trúc "
+            "(UPTREND/DOWNTREND/RANGE) và trạng thái "
+            "(BREAKOUT_ATTEMPT/BREAKOUT_CONFIRMED/FAILED_BREAKOUT/RETEST/...). "
+            "market_regime dạng REGIME_RANGE_BREAKOUT_ATTEMPT khi phù hợp. "
+            "Các trường mô tả PHẢI tiếng Việt. "
+            "BUY/SELL chỉ khi thesis+level+trigger+invalidation+R:R. "
+            "setup_score là chất lượng setup; Python tự kiểm min_score. "
+            "Không nói thiếu dữ liệu."
         )
 
         try:
@@ -627,13 +615,14 @@ class LLMAgent:
                     (raw or "")[:400],
                 )
                 repair = (
-                    f"Giá={current_price}. Điểm tối thiểu={min_score_required}. "
-                    f"primary_bias={struct_meta.get('primary_bias')}.\n"
+                    f"Giá={current_price}. primary_bias={struct_meta.get('primary_bias')}.\n"
                     "Chỉ trả về 1 JSON với các key: "
                     "market_regime, dow_structure_analysis, price_action_signal, "
                     "market_location, setup_score, action, entry_price, "
                     "stop_loss_price, take_profit_price, risk_reward_ratio, reasoning.\n"
-                    "Text tiếng Việt. Không chắc / chưa edge → HOLD, giá = null."
+                    "market_regime ví dụ REGIME_RANGE_BREAKOUT_ATTEMPT. "
+                    "Text tiếng Việt. Chưa edge → HOLD, giá = null. "
+                    "setup_score chỉ phản ánh chất lượng, không tự ép HOLD theo ngưỡng."
                 )
                 raw2 = self._chat(system=system, user=repair, temperature=0)
                 decision = extract_json_object(raw2)
