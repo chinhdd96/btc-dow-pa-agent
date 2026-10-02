@@ -34,6 +34,13 @@ DỮ LIỆU:
 {regime_memory_lessons}
 ---
 
+2b. LỊCH SỬ QUYẾT ĐỊNH GẦN ĐÂY (tóm tắt, mới nhất ở dưới)
+---
+{decision_history}
+---
+Đây chỉ là ngữ cảnh ngắn hạn. Ưu tiên dữ liệu cấu trúc/PA live bên dưới.
+Nếu thesis hoặc điều kiện chờ trước đó đã invalid → nêu rõ và cập nhật.
+
 3. CẤU TRÚC THỊ TRƯỜNG
 
 1W:
@@ -100,7 +107,8 @@ không gọi toàn bộ thị trường là SIDEWAY.
 - Có TRIGGER + INVALIDATION + R:R hợp lý chưa?
 - Điều gì ủng hộ và điều gì làm thesis sai?
 
-6. MEMORY chỉ là tham khảo. Dữ liệu hiện tại luôn được ưu tiên.
+6. MEMORY và LỊCH SỬ QUYẾT ĐỊNH chỉ là tham khảo.
+   Dữ liệu thị trường hiện tại luôn được ưu tiên; không neo cứng vào narrative cũ.
 
 7. Không ép giao dịch. Nếu chưa có edge rõ → HOLD và ghi rõ điều kiện chờ:
 BREAKOUT / RETEST / REJECTION / PULLBACK.
@@ -365,6 +373,7 @@ def _build_decision_prompt(
     *,
     core: str,
     memory_lessons: str,
+    decision_history: str,
     candles_1d: list[dict[str, Any]],
     candles_4h: list[dict[str, Any]],
     candles_1h: list[dict[str, Any]],
@@ -410,15 +419,22 @@ def _build_decision_prompt(
         else "NONE"
     )
 
+    hist_budget = config.DECISION_HISTORY_PROMPT_MAX_CHARS
+    hist_txt = (decision_history or "").strip() or "(chưa có lịch sử quyết định gần đây)"
+    if len(hist_txt) > hist_budget:
+        hist_txt = hist_txt[-hist_budget:]
+
     def _assemble(
         m_budget: int,
         n1: int,
         n4: int = 0,
         with_vol: bool = False,
+        hist: str | None = None,
     ) -> str:
         return LLM_DECISION_PROMPT.format(
             core_playbook_content=core_txt,
             regime_memory_lessons=(memory_lessons or "")[:m_budget] or "(chưa có bài học)",
+            decision_history=hist if hist is not None else hist_txt,
             structure_1w=struct_1w,
             structure_1d=struct_1d,
             structure_4h=struct_4h,
@@ -460,13 +476,14 @@ def _build_decision_prompt(
         return prompt, meta
 
     for m in (400, 200, 0):
-        prompt = _assemble(m, bars_1h, n4=0, with_vol=False)
-        if len(prompt) <= max_prompt:
-            logger.warning("Prompt trimmed memory/zoom to fit %d", max_prompt)
-            return prompt, meta
+        for h in (hist_txt, hist_txt[-700:] if len(hist_txt) > 700 else hist_txt, "(đã rút gọn)"):
+            prompt = _assemble(m, bars_1h, n4=0, with_vol=False, hist=h)
+            if len(prompt) <= max_prompt:
+                logger.warning("Prompt trimmed memory/history/zoom to fit %d", max_prompt)
+                return prompt, meta
 
     for n1 in (20, 16, 12):
-        prompt = _assemble(0, n1, n4=0, with_vol=False)
+        prompt = _assemble(0, n1, n4=0, with_vol=False, hist="(đã rút gọn)")
         if len(prompt) <= max_prompt:
             logger.warning("Prompt trimmed 1H CSV to %d to fit %d", n1, max_prompt)
             return prompt, meta
@@ -484,12 +501,20 @@ class LLMAgent:
             base_url=config.LLM_BASE_URL,
         )
 
-    def _chat(self, system: str, user: str, temperature: float = 0.2) -> str:
+    def _chat(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+    ) -> str:
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        max_tokens = max(config.LLM_MAX_COMPLETION_TOKENS, 2000)
+        max_tokens = max_tokens if max_tokens is not None else max(
+            config.LLM_MAX_COMPLETION_TOKENS, 2000
+        )
 
         def _create(use_json: bool):
             kwargs: dict[str, Any] = {
@@ -552,6 +577,37 @@ class LLMAgent:
         )
         return content
 
+    def summarize_decision_for_history(
+        self,
+        decision: dict[str, Any],
+        price: float,
+    ) -> str:
+        """Compress a verbose decision into one fixed-length line for history."""
+        slim = {
+            "market_regime": decision.get("market_regime"),
+            "action": decision.get("action"),
+            "setup_score": decision.get("setup_score"),
+            "market_location": decision.get("market_location"),
+            "price_action_signal": (decision.get("price_action_signal") or "")[:240],
+            "reasoning": (decision.get("reasoning") or "")[:320],
+        }
+        system = (
+            "Nén quyết định trading thành ĐÚNG 1 dòng tiếng Việt/ASCII. "
+            f"Tối đa {config.DECISION_SUMMARY_MAX_CHARS} ký tự. "
+            "Format: regime | action | score | level/wait | status | 1 câu. "
+            "Chỉ nén nội dung đã cho, không suy luận thêm, không markdown."
+        )
+        user = (
+            f"Giá={price}. Quyết định JSON:\n"
+            f"{json.dumps(slim, ensure_ascii=False)}"
+        )
+        raw = self._chat(system=system, user=user, temperature=0, max_tokens=120)
+        line = (raw or "").strip().splitlines()[0] if raw else ""
+        line = line.strip("` ").strip()
+        if len(line) > config.DECISION_SUMMARY_MAX_CHARS:
+            line = line[: config.DECISION_SUMMARY_MAX_CHARS - 1] + "…"
+        return line
+
     def get_decision(
         self,
         candles_4h: list[dict[str, Any]],
@@ -561,6 +617,7 @@ class LLMAgent:
         memory_lessons: str,
         min_score_required: float,
         candles_1d: list[dict[str, Any]] | None = None,
+        decision_history: str = "",
     ) -> dict[str, Any]:
         core = _read_text(config.PATHS["CORE_PLAYBOOK"])
         candles_1d = candles_1d or []
@@ -576,6 +633,7 @@ class LLMAgent:
         prompt, struct_meta = _build_decision_prompt(
             core=core,
             memory_lessons=memory_lessons,
+            decision_history=decision_history,
             candles_1d=candles_1d,
             candles_4h=candles_4h,
             candles_1h=candles_1h,
@@ -584,9 +642,10 @@ class LLMAgent:
             min_score_required=min_score_required,
         )
         logger.info(
-            "Decision prompt chars=%d core=%d 1D=%d 4H=%d 1H=%d primary=%s",
+            "Decision prompt chars=%d core=%d hist=%d 1D=%d 4H=%d 1H=%d primary=%s",
             len(prompt),
             min(len(core), config.CORE_PLAYBOOK_MAX_CHARS),
+            len(decision_history or ""),
             len(candles_1d),
             len(candles_4h),
             len(candles_1h),
@@ -602,6 +661,7 @@ class LLMAgent:
             "Các trường mô tả PHẢI tiếng Việt. "
             "BUY/SELL chỉ khi thesis+level+trigger+invalidation+R:R. "
             "setup_score là chất lượng setup; Python tự kiểm min_score. "
+            "Lịch sử quyết định chỉ là ngữ cảnh — ưu tiên dữ liệu live. "
             "Không nói thiếu dữ liệu."
         )
 
