@@ -22,6 +22,7 @@ import schedule
 import config
 from modules.binance_client import BinanceClient, BinanceClientError
 from modules import candle_store
+from modules import decision_history
 from modules.learner_crawler import run_learner_crawler
 from modules.llm_agent import LLMAgent
 from modules.memory_manager import MemoryManager
@@ -371,6 +372,9 @@ def job_trade(
             return
 
         min_score = effective_min_score(memory)
+        hist_txt = decision_history.format_for_prompt(
+            decision_history.load_recent(config.DECISION_HISTORY_MAX)
+        )
         decision = llm.get_decision(
             candles_4h=candles_4h,
             candles_1h=candles_1h,
@@ -379,6 +383,7 @@ def job_trade(
             current_position=None,
             memory_lessons=memory.get_all_lessons_summary(),
             min_score_required=min_score,
+            decision_history=hist_txt,
         )
         decision, reject = validate_decision_hard(
             decision,
@@ -395,6 +400,14 @@ def job_trade(
             extra += f" | bị chặn: {reject}"
         state["last_decision"] = decision
         _save_state(state)
+        try:
+            decision_history.append(
+                decision,
+                price,
+                summarize_fn=llm.summarize_decision_for_history,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("decision_history append failed: %s", exc)
         notifier.notify_decision(decision, balance=balance, extra=extra)
 
         action = decision.get("action")
@@ -482,6 +495,9 @@ def job_trade(
 
     min_score = effective_min_score(memory)
     lessons = memory.get_all_lessons_summary()
+    hist_txt = decision_history.format_for_prompt(
+        decision_history.load_recent(config.DECISION_HISTORY_MAX)
+    )
     decision = llm.get_decision(
         candles_4h=candles_4h,
         candles_1h=candles_1h,
@@ -490,6 +506,7 @@ def job_trade(
         current_position=None,
         memory_lessons=lessons,
         min_score_required=min_score,
+        decision_history=hist_txt,
     )
     decision, reject = validate_decision_hard(
         decision,
@@ -506,6 +523,14 @@ def job_trade(
 
     state["last_decision"] = decision
     _save_state(state)
+    try:
+        decision_history.append(
+            decision,
+            price,
+            summarize_fn=llm.summarize_decision_for_history,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("decision_history append failed: %s", exc)
     notifier.notify_decision(decision, balance=balance, extra=extra)
 
     action = decision.get("action")
