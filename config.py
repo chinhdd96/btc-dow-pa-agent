@@ -29,7 +29,16 @@ CANDLE_LIMIT_MAIN = int(os.getenv("CANDLE_LIMIT_MAIN", "150"))
 CANDLE_LIMIT_TREND = int(os.getenv("CANDLE_LIMIT_TREND", "200"))
 CANDLE_LIMIT_HTF = int(os.getenv("CANDLE_LIMIT_HTF", "120"))
 MAX_LESSONS_PER_REGIME = 5
-DECISION_INTERVAL_MINUTES = 15
+DECISION_INTERVAL_MINUTES = 30
+# Short-term decision history injected into the next prompt
+DECISION_HISTORY_MAX = int(os.getenv("DECISION_HISTORY_MAX", "20"))
+DECISION_SUMMARY_MAX_CHARS = int(os.getenv("DECISION_SUMMARY_MAX_CHARS", "200"))
+DECISION_HISTORY_PROMPT_MAX_CHARS = int(
+    os.getenv("DECISION_HISTORY_PROMPT_MAX_CHARS", "1400")
+)
+DECISION_SUMMARY_LLM_THRESHOLD = int(
+    os.getenv("DECISION_SUMMARY_LLM_THRESHOLD", "280")
+)
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
@@ -94,4 +103,5 @@ PATHS = {
     "SOURCES": str(BASE_DIR / "sources.json"),
     "STATE": str(BASE_DIR / "generated" / "runtime_state.json"),
     "PAPER_ACCOUNT": str(BASE_DIR / "generated" / "paper_account.json"),
+    "DECISION_HISTORY": str(BASE_DIR / "generated" / "decision_history.jsonl"),
 }
