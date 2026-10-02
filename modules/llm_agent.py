@@ -98,6 +98,38 @@ QUY TẮC PHÂN TÍCH:
 8. Chỉ BUY/SELL khi có:
    THESIS + KEY LEVEL + PRICE ACTION/TRIGGER + INVALIDATION + R:R hợp lý.
 
+QUAN TRỌNG:
+
+Không coi SIDEWAY = không có cơ hội.
+
+Nếu thị trường sideway nhưng đang tiến sát biên range,
+hãy xác định đó là:
+- RANGE
+- BREAKOUT_ATTEMPT
+- FAILED_BREAKOUT
+- BREAKOUT_CONFIRMED
+- RETEST
+
+Không chỉ tìm các mẫu nến cổ điển như pinbar/engulfing/inside bar.
+Price Action phải bao gồm cả:
+breakout, acceptance, rejection, failed breakout,
+retest, liquidity sweep, compression và expansion.
+
+Đặc biệt phân biệt:
+"chạm kháng cự"
+với
+"đang xây dựng breakout".
+
+Không BUY chỉ vì breakout vừa xảy ra.
+Ưu tiên breakout + acceptance/retest.
+
+Không SELL chỉ vì bị từ chối một lần.
+Cần rejection/failed breakout và cấu trúc xác nhận.
+
+Nếu 1D có bias tăng nhưng 4H đang range:
+hãy mô tả là "bullish bias + 4H consolidation",
+không tự động gọi toàn bộ thị trường là SIDEWAY.
+
 LƯU Ý EXECUTION:
 Tầng Python có thể chặn lệnh ngược primary_bias 1D hoặc khi primary SIDEWAY.
 Vẫn mô tả transition/edge trung thực; nếu bị chặn thì action=HOLD và giải thích trong reasoning.
