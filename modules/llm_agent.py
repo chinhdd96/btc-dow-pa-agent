@@ -15,83 +15,123 @@ import config
 
 logger = logging.getLogger(__name__)
 
-LLM_DECISION_PROMPT = """Bạn là một Trader Thuật Toán Chuyên Nghiệp (Senior Crypto Quant Trader) vận hành theo đúng nguyên lý LÝ THUYẾT DOW và PRICE ACTION.
+LLM_DECISION_PROMPT = """Bạn là Senior Crypto Quant Trader chuyên giao dịch BTCUSDT.
 
-NHIỆM VỤ CỦA BẠN:
-Đọc dữ liệu nến Live, kết hợp 3 Tầng Tri thức và Bối cảnh Tin tức hiện tại để đưa ra quyết định giao dịch duy nhất cho cặp BTCUSDT.
+MỤC TIÊU:
+Phân tích thị trường thực chiến và chỉ giao dịch khi có lợi thế rõ ràng.
+LÝ THUYẾT DOW và PRICE ACTION là nền tảng chính để đọc cấu trúc và tìm điểm vào,
+nhưng KHÔNG được áp dụng máy móc. Dữ liệu thị trường hiện tại luôn được ưu tiên.
 
-DỮ LIỆU ĐẦU VÀO:
+DỮ LIỆU:
 
-1. TẦNG 1: LÝ THUYẾT DOW & PA CORE PLAYBOOK
+1. DOW & PRICE ACTION PLAYBOOK
 ---
 {core_playbook_content}
 ---
 
-2. TẦNG 2A / 2B: (TẠM TẮT — daily playbook & news context không đưa vào prompt)
-
-3. TẦNG 3: BÀI HỌC KINH NGHIỆM THỰC CHIẾN MỚI NHẤT (MEMORY)
+2. MEMORY / KINH NGHIỆM
 ---
 {regime_memory_lessons}
 ---
 
-4. CẤU TRÚC ĐÃ TỰ TÍNH TRÊN FULL HISTORY CACHE (Dow):
-   - 1D/4H: nguồn sự thật TREND + S/R + channel (role=htf, không PA)
-   - 1H: chỉ PA entry tại key level Dow (role=entry)
-CHÚ GIẢI:
-- primary_bias = bias 1D (Dow primary). 1H KHÔNG được đảo primary.
-- UPTREND=HH+HL | DOWNTREND=LH+LL | SIDEWAY_CHOP=đỉnh đáy chồng
-- Dow timeline: LABEL@giá(tuổi) trên full history; channel pos_in_ch 0=sàn 1=trần
-- S/R cluster + key levels gộp 1D∪4H
-QUY TẮC DOW BẮT BUỘC:
-- primary UPTREND → chỉ BUY hoặc HOLD
-- primary DOWNTREND → chỉ SELL hoặc HOLD
-- primary SIDEWAY_CHOP → HOLD
-- Entry phải gần key level Dow (S/R/channel/EMA HTF)
---- 1W ---
+3. CẤU TRÚC THỊ TRƯỜNG
+
+1W:
 {structure_1w}
---- 1D (PRIMARY) ---
+
+1D:
 {structure_1d}
---- 4H (confirm) ---
+
+4H:
 {structure_4h}
---- 1H (PA entry) ---
+
+1H:
 {structure_1h}
---- alignment: {structure_align}
----
-5. ZOOM PA (không dùng để xác định trend dài):
+
+alignment: {structure_align}
+
+ZOOM PA:
 {zoom_block}
-- Giá hiện tại: {current_price}
-- Vị thế: {current_position}
 
-QUY TRÌNH:
-BƯỚC 1: Regime = primary_bias 1D; xác nhận aligned_htf với 4H.
-BƯỚC 2: Key level Dow từ S/R/channel HTF.
-BƯỚC 3: PA trên 1H/CSV tại level — thuận primary.
-BƯỚC 4: Score 1–10; <{min_score_required} → HOLD; ≥ → BUY/SELL đúng chiều Dow.
+GIÁ HIỆN TẠI: {current_price}
+VỊ THẾ HIỆN TẠI: {current_position}
+ĐIỂM TỐI THIỂU ĐỂ VÀO LỆNH: {min_score_required}
 
-CẤM: Không trả lời kiểu "thiếu dữ liệu / không đủ nến / không xác định được cấu trúc vì thiếu thông tin" —
-luôn suy luận từ block pre-compute + CSV nến đã cung cấp (có thể HOLD nếu setup không nét).
+QUY TẮC PHÂN TÍCH:
 
-YÊU CẦU ĐẦU RA:
-- Trả về ĐÚNG 1 object JSON. Không markdown, không ```, không giải thích trước/sau JSON.
-- Bắt đầu bằng {{ và kết thúc bằng }}.
-- action chỉ nhận: BUY | SELL | HOLD
-- entry_price, stop_loss_price, take_profit_price là số (HOLD thì dùng null)
-- BẮT BUỘC: các trường mô tả/lý do viết bằng TIẾNG VIỆT rõ ràng, dễ hiểu:
-  dow_structure_analysis, price_action_signal, reasoning
+1. Dùng Dow để xác định cấu trúc chính:
+   HH, HL, LH, LL, xu hướng, vùng giá quan trọng và sự thay đổi cấu trúc.
+
+2. Dùng Price Action để tìm thời điểm vào:
+   rejection, breakout, failed breakout, retest, engulfing, pinbar,
+   compression, expansion và các hành vi giá đáng chú ý khác.
+
+3. Không bắt buộc 1D/4H/1H phải cùng một hướng.
+   Hãy xác định timeframe nào đang dẫn dắt và timeframe nào đang xác nhận
+   hoặc mâu thuẫn.
+
+4. Không được máy móc:
+   UPTREND = BUY
+   DOWNTREND = SELL
+   SIDEWAY = HOLD
+
+   Nếu thị trường đang chuyển trạng thái, hãy phát hiện:
+   breakout, reversal, trend exhaustion, failed breakout hoặc regime transition.
+
+5. Luôn đánh giá:
+   - Giá đang ở đâu trong cấu trúc?
+   - Đang gần Support/Resistance hay giữa range?
+   - Có Price Action xác nhận chưa?
+   - Có dấu hiệu breakout/retest/failure không?
+   - Điều gì đang ủng hộ thesis?
+   - Điều gì có thể khiến thesis sai?
+   - Entry, SL, TP có hợp lý và R:R đủ tốt không?
+
+6. Có thể tham khảo MEMORY nhưng không được để memory hoặc lý thuyết
+   override dữ liệu thị trường hiện tại.
+
+7. Không cần cố giao dịch.
+   Nếu chưa có edge rõ ràng → HOLD.
+   Nếu cần chờ breakout/retest/pullback → HOLD và nêu rõ điều kiện chờ.
+   setup_score < {min_score_required} → HOLD.
+
+8. Chỉ BUY/SELL khi có:
+   THESIS + KEY LEVEL + PRICE ACTION/TRIGGER + INVALIDATION + R:R hợp lý.
+
+LƯU Ý EXECUTION:
+Tầng Python có thể chặn lệnh ngược primary_bias 1D hoặc khi primary SIDEWAY.
+Vẫn mô tả transition/edge trung thực; nếu bị chặn thì action=HOLD và giải thích trong reasoning.
+
+ĐIỂM QUAN TRỌNG:
+Hãy suy nghĩ như một trader thực chiến:
+không cố chứng minh lý thuyết đúng,
+mà dùng lý thuyết để hiểu thị trường và tìm cơ hội có xác suất/lợi thế tốt.
+
+CẤM: Không trả lời kiểu "thiếu dữ liệu / không đủ nến" —
+luôn suy luận từ block pre-compute + CSV đã cung cấp.
+
+OUTPUT:
+Chỉ trả về đúng 1 JSON object, không markdown, không ```.
+Bắt đầu bằng {{ và kết thúc bằng }}.
+action chỉ nhận: BUY | SELL | HOLD.
+Các trường mô tả viết bằng tiếng Việt.
 
 FORMAT:
 {{
   "market_regime": "REGIME_UPTREND",
-  "dow_structure_analysis": "Mô tả cấu trúc Dow 1D/4H/1H bằng tiếng Việt (dựa swing/S-R/EMA)",
-  "price_action_signal": "Mô tả tín hiệu PA tại key level bằng tiếng Việt",
+  "dow_structure_analysis": "Mô tả cấu trúc Dow bằng tiếng Việt",
+  "price_action_signal": "Mô tả tín hiệu PA bằng tiếng Việt",
+  "market_location": "Giá đang ở đâu trong cấu trúc (tiếng Việt)",
   "setup_score": 7.5,
   "action": "HOLD",
   "entry_price": null,
   "stop_loss_price": null,
   "take_profit_price": null,
   "risk_reward_ratio": null,
-  "reasoning": "Lý do vào lệnh hoặc HOLD bằng tiếng Việt"
+  "reasoning": "Lý do BUY/SELL/HOLD bằng tiếng Việt"
 }}
+
+Nếu HOLD: entry_price, stop_loss_price, take_profit_price, risk_reward_ratio = null.
 """
 
 POST_MORTEM_PROMPT = """Bạn là AI Risk Officer phụ trách phân tích hậu phẫu (Post-Mortem) lệnh giao dịch vừa đóng.
@@ -122,6 +162,7 @@ HOLD_DECISION: dict[str, Any] = {
     "market_regime": "REGIME_SIDEWAY_CHOP",
     "dow_structure_analysis": "Không phân tích được (fallback)",
     "price_action_signal": "Không có",
+    "market_location": "",
     "setup_score": 0.0,
     "action": "HOLD",
     "entry_price": None,
@@ -536,10 +577,12 @@ class LLMAgent:
         )
 
         system = (
-            "Bạn là trader Dow/PA. Chỉ trả về 1 JSON hợp lệ, không markdown. "
-            "Các trường dow_structure_analysis, price_action_signal, reasoning "
-            "PHẢI viết bằng tiếng Việt. Lệnh phải thuận primary_bias 1D; "
-            "SIDEWAY → HOLD. PA chỉ trên 1H tại key level. Không nói thiếu dữ liệu."
+            "Bạn là Senior Crypto Quant Trader Dow/PA. Chỉ trả về 1 JSON hợp lệ, "
+            "không markdown. Phân tích thực chiến, không map máy móc bias→action. "
+            "Các trường mô tả (dow_structure_analysis, price_action_signal, "
+            "market_location, reasoning) PHẢI viết bằng tiếng Việt. "
+            "Chỉ BUY/SELL khi có thesis+level+trigger+invalidation+R:R và "
+            f"setup_score>={min_score_required}. Không nói thiếu dữ liệu."
         )
 
         try:
@@ -556,10 +599,9 @@ class LLMAgent:
                     f"primary_bias={struct_meta.get('primary_bias')}.\n"
                     "Chỉ trả về 1 JSON với các key: "
                     "market_regime, dow_structure_analysis, price_action_signal, "
-                    "setup_score, action, entry_price, stop_loss_price, "
-                    "take_profit_price, risk_reward_ratio, reasoning.\n"
-                    "Thuận Dow primary; SIDEWAY → HOLD. Text tiếng Việt.\n"
-                    "Nếu không chắc: action=HOLD, các giá = null."
+                    "market_location, setup_score, action, entry_price, "
+                    "stop_loss_price, take_profit_price, risk_reward_ratio, reasoning.\n"
+                    "Text tiếng Việt. Không chắc / chưa edge → HOLD, giá = null."
                 )
                 raw2 = self._chat(system=system, user=repair, temperature=0)
                 decision = extract_json_object(raw2)
@@ -604,6 +646,7 @@ class LLMAgent:
             "market_regime": regime,
             "dow_structure_analysis": decision.get("dow_structure_analysis", ""),
             "price_action_signal": decision.get("price_action_signal", ""),
+            "market_location": decision.get("market_location", ""),
             "setup_score": score,
             "action": action,
             "entry_price": _to_float(decision.get("entry_price")),
