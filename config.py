@@ -29,7 +29,7 @@ CANDLE_LIMIT_MAIN = int(os.getenv("CANDLE_LIMIT_MAIN", "150"))
 CANDLE_LIMIT_TREND = int(os.getenv("CANDLE_LIMIT_TREND", "200"))
 CANDLE_LIMIT_HTF = int(os.getenv("CANDLE_LIMIT_HTF", "120"))
 MAX_LESSONS_PER_REGIME = 5
-DECISION_INTERVAL_MINUTES = 30
+DECISION_INTERVAL_MINUTES = int(os.getenv("DECISION_INTERVAL_MINUTES", "60"))
 # Short-term decision history injected into the next prompt
 DECISION_HISTORY_MAX = int(os.getenv("DECISION_HISTORY_MAX", "20"))
 DECISION_SUMMARY_MAX_CHARS = int(os.getenv("DECISION_SUMMARY_MAX_CHARS", "200"))
@@ -39,6 +39,16 @@ DECISION_HISTORY_PROMPT_MAX_CHARS = int(
 DECISION_SUMMARY_LLM_THRESHOLD = int(
     os.getenv("DECISION_SUMMARY_LLM_THRESHOLD", "280")
 )
+# Persist decision history across Blitz rebuilds via GitHub Contents API
+HISTORY_GITHUB_TOKEN = (
+    os.getenv("HISTORY_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN") or ""
+).strip()
+HISTORY_GITHUB_REPO = os.getenv(
+    "HISTORY_GITHUB_REPO", "chinhdd96/btc-dow-pa-agent"
+).strip()
+HISTORY_GITHUB_PATH = os.getenv(
+    "HISTORY_GITHUB_PATH", "generated/decision_history.jsonl"
+).strip()
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
