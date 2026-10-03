@@ -401,11 +401,12 @@ def job_trade(
         state["last_decision"] = decision
         _save_state(state)
         try:
-            decision_history.append(
-                decision,
-                price,
-                summarize_fn=llm.summarize_decision_for_history,
+            sum_fn = (
+                None
+                if decision.get("llm_error") == "rate_limit"
+                else llm.summarize_decision_for_history
             )
+            decision_history.append(decision, price, summarize_fn=sum_fn)
         except Exception as exc:  # noqa: BLE001
             logger.warning("decision_history append failed: %s", exc)
         notifier.notify_decision(decision, balance=balance, extra=extra)
@@ -524,11 +525,12 @@ def job_trade(
     state["last_decision"] = decision
     _save_state(state)
     try:
-        decision_history.append(
-            decision,
-            price,
-            summarize_fn=llm.summarize_decision_for_history,
+        sum_fn = (
+            None
+            if decision.get("llm_error") == "rate_limit"
+            else llm.summarize_decision_for_history
         )
+        decision_history.append(decision, price, summarize_fn=sum_fn)
     except Exception as exc:  # noqa: BLE001
         logger.warning("decision_history append failed: %s", exc)
     notifier.notify_decision(decision, balance=balance, extra=extra)
