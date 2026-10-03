@@ -459,10 +459,33 @@ def _build_decision_prompt(
         else "NONE"
     )
 
+    hist_placeholder = "(chưa có lịch sử quyết định gần đây)"
     hist_budget = config.DECISION_HISTORY_PROMPT_MAX_CHARS
-    hist_txt = (decision_history or "").strip() or "(chưa có lịch sử quyết định gần đây)"
-    if len(hist_txt) > hist_budget:
-        hist_txt = hist_txt[-hist_budget:]
+    raw_hist = (decision_history or "").strip()
+    hist_lines: list[str] = []
+    if raw_hist and raw_hist != hist_placeholder:
+        hist_lines = [ln.strip() for ln in raw_hist.splitlines() if ln.strip()]
+
+    def _join_hist(lines: list[str]) -> str:
+        return "\n".join(lines) if lines else hist_placeholder
+
+    def _fit_hist_budget(lines: list[str]) -> list[str]:
+        """Keep newest lines within char budget (drop oldest first)."""
+        if not lines:
+            return []
+        kept: list[str] = []
+        total = 0
+        for line in reversed(lines):
+            add = len(line) + (1 if kept else 0)
+            if total + add > hist_budget:
+                break
+            kept.append(line)
+            total += add
+        kept.reverse()
+        return kept
+
+    hist_lines = _fit_hist_budget(hist_lines)
+    hist_txt = _join_hist(hist_lines)
 
     def _assemble(
         m_budget: int,
@@ -515,21 +538,70 @@ def _build_decision_prompt(
     if len(prompt) <= max_prompt:
         return prompt, meta
 
-    for m in (400, 200, 0):
-        for h in (hist_txt, hist_txt[-700:] if len(hist_txt) > 700 else hist_txt, "(đã rút gọn)"):
-            prompt = _assemble(m, bars_1h, n4=0, with_vol=False, hist=h)
-            if len(prompt) <= max_prompt:
-                logger.warning("Prompt trimmed memory/history/zoom to fit %d", max_prompt)
-                return prompt, meta
+    # Over budget: drop oldest decision-history lines first (keep OUTPUT/JSON intact).
+    # e.g. 20 → 18 → 15 → 12 … (file history trên disk không bị xóa).
+    n_hist = len(hist_lines)
+    keep_targets = []
+    for k in (18, 15, 12, 10, 8, 5, 3, 1, 0):
+        if k < n_hist:
+            keep_targets.append(k)
+    # Also step down one-by-one near the top if n is between ladder rungs
+    for k in range(n_hist - 1, 0, -1):
+        if k not in keep_targets and k >= 15:
+            keep_targets.append(k)
+    keep_targets = sorted(set(keep_targets), reverse=True)
 
-    for n1 in (20, 16, 12):
-        prompt = _assemble(0, n1, n4=0, with_vol=False, hist="(đã rút gọn)")
+    for keep_n in keep_targets:
+        h_lines = hist_lines[-keep_n:] if keep_n else []
+        h = _join_hist(h_lines)
+        prompt = _assemble(mem_budget, bars_1h, n4=0, with_vol=False, hist=h)
         if len(prompt) <= max_prompt:
-            logger.warning("Prompt trimmed 1H CSV to %d to fit %d", n1, max_prompt)
+            logger.warning(
+                "Prompt fit by reducing decision history %d → %d lines (chars=%d)",
+                n_hist,
+                keep_n,
+                len(prompt),
+            )
             return prompt, meta
 
-    logger.warning("Prompt still large (%d) — hard truncate tail", len(prompt))
-    return prompt[:max_prompt], meta
+    # Still over: shrink memory, then 1H zoom; history already minimal/empty
+    h_min = _join_hist(hist_lines[-1:] if hist_lines else [])
+    for m in (400, 200, 0):
+        prompt = _assemble(m, bars_1h, n4=0, with_vol=False, hist=h_min)
+        if len(prompt) <= max_prompt:
+            logger.warning(
+                "Prompt trimmed memory to %d (+ hist≤1) to fit %d", m, max_prompt
+            )
+            return prompt, meta
+
+    for n1 in (20, 16, 12):
+        prompt = _assemble(0, n1, n4=0, with_vol=False, hist=hist_placeholder)
+        if len(prompt) <= max_prompt:
+            logger.warning(
+                "Prompt trimmed 1H CSV to %d + dropped history to fit %d",
+                n1,
+                max_prompt,
+            )
+            return prompt, meta
+
+    # Last resort: shrink core playbook from its end (never cut prompt OUTPUT tail)
+    for core_cap in (3000, 2500, 2000, 1500):
+        core_txt = core_txt[:core_cap]
+        prompt = _assemble(0, 12, n4=0, with_vol=False, hist=hist_placeholder)
+        if len(prompt) <= max_prompt:
+            logger.warning(
+                "Prompt trimmed core_playbook to %d chars to fit %d",
+                core_cap,
+                max_prompt,
+            )
+            return prompt, meta
+
+    logger.error(
+        "Prompt still over budget (%d > %d) after history/memory/core trim — sending as-is",
+        len(prompt),
+        max_prompt,
+    )
+    return prompt, meta
 
 
 class LLMAgent:
