@@ -620,6 +620,13 @@ def safe_trade_job(
 
 def main() -> None:
     logger.info("Starting BTC Dow/PA Mono-Agent")
+    # Restore decision history from GitHub if local empty (Blitz rebuild-safe)
+    try:
+        restored = decision_history.ensure_restored()
+        if restored:
+            logger.info("Restored %d decision_history rows from remote", restored)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("decision_history restore skipped: %s", exc)
     memory = MemoryManager()
     llm = LLMAgent()
     notifier = Notifier()
