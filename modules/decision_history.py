@@ -1,13 +1,20 @@
-"""Short-term decision history for LLM context (separate from memory lessons)."""
+"""Short-term decision history for LLM context (separate from memory lessons).
+
+Persists locally under generated/decision_history.jsonl and optionally mirrors
+to GitHub so Blitz rebuilds can restore the last N summaries.
+"""
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+import requests
 
 import config
 
@@ -90,6 +97,141 @@ def rule_summary(
     return line
 
 
+def _rows_to_jsonl(rows: list[dict[str, Any]]) -> str:
+    return "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + (
+        "\n" if rows else ""
+    )
+
+
+def _write_rows(rows: list[dict[str, Any]]) -> None:
+    path = _history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_rows_to_jsonl(rows), encoding="utf-8")
+
+
+def _slim_for_remote(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Public-repo safe: keep prompt-useful fields, drop bulky full blobs."""
+    out: list[dict[str, Any]] = []
+    for r in rows[-config.DECISION_HISTORY_MAX :]:
+        out.append(
+            {
+                "ts": r.get("ts"),
+                "price": r.get("price"),
+                "summary": r.get("summary"),
+                "summary_via": r.get("summary_via", "rule"),
+                "full": {
+                    "market_regime": (r.get("full") or {}).get("market_regime"),
+                    "action": (r.get("full") or {}).get("action"),
+                    "setup_score": (r.get("full") or {}).get("setup_score"),
+                    "reasoning": _one_line(
+                        str((r.get("full") or {}).get("reasoning") or ""), 120
+                    ),
+                },
+            }
+        )
+    return out
+
+
+def _github_headers() -> dict[str, str] | None:
+    tok = config.HISTORY_GITHUB_TOKEN
+    if not tok:
+        return None
+    return {
+        "Authorization": f"token {tok}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "btc-dow-pa-agent-history",
+    }
+
+
+def backup_remote(rows: list[dict[str, Any]] | None = None) -> bool:
+    """Upsert slim history JSONL to GitHub (survives Blitz rebuild)."""
+    headers = _github_headers()
+    if not headers:
+        return False
+    rows = _slim_for_remote(rows if rows is not None else load_recent(n=10_000))
+    repo = config.HISTORY_GITHUB_REPO
+    path = config.HISTORY_GITHUB_PATH
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    content_b64 = base64.b64encode(_rows_to_jsonl(rows).encode("utf-8")).decode("ascii")
+    sha = None
+    try:
+        meta = requests.get(url, headers=headers, timeout=30)
+        if meta.status_code == 200:
+            sha = meta.json().get("sha")
+        elif meta.status_code != 404:
+            logger.warning("history remote GET HTTP %s", meta.status_code)
+            return False
+        body: dict[str, Any] = {
+            "message": "chore: sync decision_history for Blitz persistence",
+            "content": content_b64,
+            "branch": "main",
+        }
+        if sha:
+            body["sha"] = sha
+        put = requests.put(url, headers=headers, json=body, timeout=60)
+        if put.status_code not in {200, 201}:
+            logger.warning(
+                "history remote PUT HTTP %s: %s", put.status_code, put.text[:200]
+            )
+            return False
+        logger.info("decision_history backed up to GitHub n=%d", len(rows))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("history remote backup failed: %s", exc)
+        return False
+
+
+def restore_from_remote() -> int:
+    """If local history empty, pull from GitHub. Returns rows restored."""
+    local = load_recent(n=10_000)
+    if local:
+        return 0
+    headers = _github_headers()
+    if not headers:
+        logger.info("No HISTORY_GITHUB_TOKEN — skip remote restore")
+        return 0
+    repo = config.HISTORY_GITHUB_REPO
+    path = config.HISTORY_GITHUB_PATH
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 404:
+            logger.info("No remote decision_history yet")
+            return 0
+        if resp.status_code != 200:
+            logger.warning("history remote restore HTTP %s", resp.status_code)
+            return 0
+        data = resp.json()
+        raw = base64.b64decode(data.get("content") or "").decode("utf-8")
+        rows: list[dict[str, Any]] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        rows = rows[-config.DECISION_HISTORY_MAX :]
+        if not rows:
+            return 0
+        _write_rows(rows)
+        logger.info("decision_history restored from GitHub n=%d", len(rows))
+        return len(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("history remote restore failed: %s", exc)
+        return 0
+
+
+def ensure_restored() -> int:
+    """Call once at process start — never deletes existing local history."""
+    n_local = len(load_recent(n=10_000))
+    if n_local > 0:
+        logger.info("decision_history local n=%d — keep as-is", n_local)
+        return 0
+    return restore_from_remote()
+
+
 def load_recent(n: int | None = None) -> list[dict[str, Any]]:
     path = _history_path()
     if not path.exists():
@@ -125,7 +267,6 @@ def format_for_prompt(entries: list[dict[str, Any]] | None = None) -> str:
         return "(chưa có lịch sử quyết định gần đây)"
 
     budget = config.DECISION_HISTORY_PROMPT_MAX_CHARS
-    # Prefer newest: keep from the end while under budget
     kept: list[str] = []
     total = 0
     for line in reversed(lines):
@@ -148,6 +289,7 @@ def append(
     """
     Persist full decision + one-line summary.
     Uses rule_summary first; if longer than threshold and summarize_fn given, LLM compress.
+    Never truncates history below DECISION_HISTORY_MAX except rolling window.
     """
     ts = ts or _iso_now()
     draft = rule_summary(decision, price, ts=ts, truncate=False)
@@ -179,7 +321,6 @@ def append(
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM decision summarize failed, keep rule line: %s", exc)
 
-    # Slim full for disk (drop bulky structure_meta lists if huge — keep meta keys)
     full = dict(decision)
     meta = full.get("structure_meta")
     if isinstance(meta, dict):
@@ -197,21 +338,25 @@ def append(
         "summary_via": "llm" if used_llm else "rule",
     }
 
-    path = _history_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_recent(n=10_000)
     existing.append(record)
     existing = existing[-config.DECISION_HISTORY_MAX :]
     try:
-        with path.open("w", encoding="utf-8") as f:
-            for row in existing:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _write_rows(existing)
         logger.info(
-            "decision_history append via=%s chars=%d n=%d",
+            "decision_history append via=%s chars=%d n=%d | %s",
             record["summary_via"],
             len(summary),
             len(existing),
+            summary,
         )
     except OSError as exc:
         logger.exception("decision_history write failed: %s", exc)
+
+    # Best-effort remote mirror (does not delete local on failure)
+    try:
+        backup_remote(existing)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("history backup skipped: %s", exc)
+
     return record
