@@ -116,8 +116,9 @@ BREAKOUT / RETEST / REJECTION / PULLBACK.
 Chỉ BUY/SELL khi có:
 THESIS + KEY LEVEL + TRIGGER + INVALIDATION + R:R.
 
-setup_score là đánh giá chất lượng setup, không phải điều kiện bắt buộc để BUY/SELL.
-Tầng Python chịu trách nhiệm kiểm tra min_score, risk và execution.
+setup_score là đánh giá chất lượng setup trên thang 0–10 (số thực, ví dụ 6.5).
+KHÔNG dùng thang 0–1 hay 0–100. Python sẽ chuẩn hóa/clamp về 0–10.
+setup_score không phải điều kiện bắt buộc để BUY/SELL — tầng Python kiểm min_score.
 
 LƯU Ý EXECUTION:
 Tầng Python có thể chặn lệnh ngược primary_bias 1D hoặc khi primary SIDEWAY.
@@ -196,6 +197,45 @@ HOLD_DECISION: dict[str, Any] = {
     "risk_reward_ratio": None,
     "reasoning": "HOLD do lỗi LLM/parse/validation",
 }
+
+
+def _normalize_setup_score(raw: Any) -> float:
+    """Stabilize LLM score onto [0, 10]."""
+    try:
+        score = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if score != score:  # NaN
+        return 0.0
+    # Common scale mistakes: 0–1 → ×10; 0–100 → ÷10
+    if 0 < score <= 1.0:
+        score *= 10.0
+    elif score > 10.0:
+        if score <= 100.0:
+            score /= 10.0
+        else:
+            score = 10.0
+    return max(0.0, min(10.0, round(score, 2)))
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "429" in text
+        or "rate_limit" in text
+        or "rate limit" in text
+        or "tokens per day" in text
+        or "tpd" in text
+    )
+
+
+def _friendly_llm_error(exc: BaseException) -> str:
+    if _is_rate_limit_error(exc):
+        return (
+            "HOLD: hết hạn mức token ngày của Groq (TPD). "
+            "Bot sẽ thử lại chu kỳ sau — không phải lỗi phân tích thị trường."
+        )
+    return f"Lỗi LLM: {exc}"
 
 
 def _read_text(path: str) -> str:
@@ -496,9 +536,11 @@ class LLMAgent:
     def __init__(self) -> None:
         if not config.LLM_API_KEY:
             logger.warning("LLM_API_KEY is empty")
+        # Avoid burning daily TPD on automatic 429 retries
         self.client = OpenAI(
             api_key=config.LLM_API_KEY or "missing",
             base_url=config.LLM_BASE_URL,
+            max_retries=0,
         )
 
     def _chat(
@@ -512,8 +554,10 @@ class LLMAgent:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        max_tokens = max_tokens if max_tokens is not None else max(
-            config.LLM_MAX_COMPLETION_TOKENS, 2000
+        max_tokens = (
+            max_tokens
+            if max_tokens is not None
+            else max(256, int(config.LLM_MAX_COMPLETION_TOKENS))
         )
 
         def _create(use_json: bool):
@@ -534,6 +578,8 @@ class LLMAgent:
             try:
                 resp = _create(True)
             except Exception as exc:  # noqa: BLE001
+                if _is_rate_limit_error(exc):
+                    raise
                 logger.warning("json_object mode failed (%s) — plain retry", exc)
                 resp = None
         if resp is None:
@@ -543,27 +589,38 @@ class LLMAgent:
         content = (msg.content or "").strip()
         reasoning = (getattr(msg, "reasoning", None) or "").strip()
 
-        if not content:
+        # Empty retry burns more TPD — skip when already rate-limited risk / keep once only
+        if not content and not _is_rate_limit_error(
+            Exception(getattr(resp.choices[0], "finish_reason", "") or "")
+        ):
             logger.warning(
-                "Empty content finish=%s reasoning_len=%d — retry plain higher tokens",
+                "Empty content finish=%s reasoning_len=%d — one plain retry",
                 getattr(resp.choices[0], "finish_reason", None),
                 len(reasoning),
             )
-            resp = self.client.chat.completions.create(
-                model=config.LLM_MODEL,
-                messages=messages
-                + [
-                    {
-                        "role": "user",
-                        "content": "Your previous answer was empty. Reply with ONLY one JSON object starting with {",
-                    }
-                ],
-                temperature=0,
-                max_tokens=max(max_tokens, 3000),
-            )
-            msg = resp.choices[0].message
-            content = (msg.content or "").strip()
-            reasoning = (getattr(msg, "reasoning", None) or "").strip()
+            try:
+                resp = self.client.chat.completions.create(
+                    model=config.LLM_MODEL,
+                    messages=messages
+                    + [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous answer was empty. "
+                                "Reply with ONLY one JSON object starting with {"
+                            ),
+                        }
+                    ],
+                    temperature=0,
+                    max_tokens=max_tokens,
+                )
+                msg = resp.choices[0].message
+                content = (msg.content or "").strip()
+                reasoning = (getattr(msg, "reasoning", None) or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                if _is_rate_limit_error(exc):
+                    raise
+                logger.warning("empty-content retry failed: %s", exc)
 
         if not content and reasoning:
             # Last resort: try extract JSON buried in reasoning
@@ -660,7 +717,8 @@ class LLMAgent:
             "market_regime dạng REGIME_RANGE_BREAKOUT_ATTEMPT khi phù hợp. "
             "Các trường mô tả PHẢI tiếng Việt. "
             "BUY/SELL chỉ khi thesis+level+trigger+invalidation+R:R. "
-            "setup_score là chất lượng setup; Python tự kiểm min_score. "
+            "setup_score BẮT BUỘC thang 0–10 (không 0–1, không 0–100); "
+            "Python tự kiểm min_score. "
             "Lịch sử quyết định chỉ là ngữ cảnh — ưu tiên dữ liệu live. "
             "Không nói thiếu dữ liệu."
         )
@@ -681,16 +739,20 @@ class LLMAgent:
                     "market_location, setup_score, action, entry_price, "
                     "stop_loss_price, take_profit_price, risk_reward_ratio, reasoning.\n"
                     "market_regime ví dụ REGIME_RANGE_BREAKOUT_ATTEMPT. "
-                    "Text tiếng Việt. Chưa edge → HOLD, giá = null. "
-                    "setup_score chỉ phản ánh chất lượng, không tự ép HOLD theo ngưỡng."
+                    "setup_score số thực 0–10. Text tiếng Việt. "
+                    "Chưa edge → HOLD, giá = null."
                 )
                 raw2 = self._chat(system=system, user=repair, temperature=0)
                 decision = extract_json_object(raw2)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("get_decision failed: %s", exc)
+            if _is_rate_limit_error(exc):
+                logger.warning("get_decision rate-limited: %s", exc)
+            else:
+                logger.exception("get_decision failed: %s", exc)
             hold = dict(HOLD_DECISION)
-            hold["reasoning"] = f"Lỗi LLM: {exc}"
+            hold["reasoning"] = _friendly_llm_error(exc)
             hold["primary_bias"] = struct_meta.get("primary_bias")
+            hold["llm_error"] = "rate_limit" if _is_rate_limit_error(exc) else "error"
             return hold
 
         out = self._normalize_decision(decision, min_score_required)
@@ -714,10 +776,7 @@ class LLMAgent:
         if action not in {"BUY", "SELL", "HOLD"}:
             action = "HOLD"
 
-        try:
-            score = float(decision.get("setup_score", 0) or 0)
-        except (TypeError, ValueError):
-            score = 0.0
+        score = _normalize_setup_score(decision.get("setup_score", 0))
 
         regime = str(decision.get("market_regime", "REGIME_SIDEWAY_CHOP"))
         if not regime.startswith("REGIME_"):
