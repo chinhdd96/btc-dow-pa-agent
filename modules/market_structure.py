@@ -444,6 +444,108 @@ def structure_to_text(summary: dict[str, Any], *, role: str = "htf") -> str:
     return "\n".join(lines)
 
 
+def compute_trade_flags(
+    candles_4h: list[dict[str, Any]],
+    candles_1h: list[dict[str, Any]],
+    near_s: float | None,
+    near_r: float | None,
+) -> dict[str, Any]:
+    """Pre-computed numeric flags for LLM (avoid misreading OHLC)."""
+    ohlc_4h = _ohlc(candles_4h)
+    ohlc_1h = _ohlc(candles_1h)
+    out: dict[str, Any] = {
+        "range_4h_low": None,
+        "range_4h_high": None,
+        "pos_in_range_4h": None,
+        "range_1h_low": None,
+        "range_1h_high": None,
+        "pos_in_range_1h": None,
+        "last_close_1h": None,
+        "close_above_R": False,
+        "close_below_S": False,
+        "sweep_high_close_back": False,
+        "sweep_low_close_back": False,
+        "local_high_1h": None,
+        "local_low_1h": None,
+        "broke_local_high": False,
+        "broke_local_low": False,
+        "atr_1h": None,
+        "atr_4h": None,
+        "near_S": near_s,
+        "near_R": near_r,
+    }
+    if not ohlc_1h:
+        return out
+
+    def _range_pos(ohlc: list[tuple[float, float, float, float]]) -> tuple[float, float, float | None]:
+        highs = [x[1] for x in ohlc]
+        lows = [x[2] for x in ohlc]
+        rh, rl = max(highs), min(lows)
+        price = ohlc[-1][3]
+        span = rh - rl
+        pos = round((price - rl) / span, 3) if span > 0 else None
+        return rl, rh, pos
+
+    if ohlc_4h:
+        rl4, rh4, pos4 = _range_pos(ohlc_4h[-48:] if len(ohlc_4h) > 48 else ohlc_4h)
+        out["range_4h_low"] = round(rl4, 1)
+        out["range_4h_high"] = round(rh4, 1)
+        out["pos_in_range_4h"] = pos4
+        out["atr_4h"] = _atr(ohlc_4h, 14)
+
+    rl1, rh1, pos1 = _range_pos(ohlc_1h[-24:] if len(ohlc_1h) > 24 else ohlc_1h)
+    out["range_1h_low"] = round(rl1, 1)
+    out["range_1h_high"] = round(rh1, 1)
+    out["pos_in_range_1h"] = pos1
+    out["atr_1h"] = _atr(ohlc_1h, 14)
+
+    last_close = round(ohlc_1h[-1][3], 1)
+    out["last_close_1h"] = last_close
+    if near_r is not None:
+        out["close_above_R"] = last_close > float(near_r)
+    if near_s is not None:
+        out["close_below_S"] = last_close < float(near_s)
+
+    recent = ohlc_1h[-3:]
+    for o, h, l, c in recent:
+        if near_r is not None and h > float(near_r) and c <= float(near_r):
+            out["sweep_high_close_back"] = True
+        if near_s is not None and l < float(near_s) and c >= float(near_s):
+            out["sweep_low_close_back"] = True
+
+    lookback = ohlc_1h[-11:-1] if len(ohlc_1h) > 11 else ohlc_1h[:-1]
+    if lookback:
+        local_h = max(x[1] for x in lookback)
+        local_l = min(x[2] for x in lookback)
+        out["local_high_1h"] = round(local_h, 1)
+        out["local_low_1h"] = round(local_l, 1)
+        out["broke_local_high"] = last_close > local_h
+        out["broke_local_low"] = last_close < local_l
+
+    return out
+
+
+def trade_flags_to_text(flags: dict[str, Any]) -> str:
+    """Compact block (<600 chars) for prompt injection."""
+    if not flags:
+        return "(không có trade_flags)"
+    parts = [
+        f"4H range={flags.get('range_4h_low')}..{flags.get('range_4h_high')} "
+        f"pos={flags.get('pos_in_range_4h')} ATR={flags.get('atr_4h')}",
+        f"1H range={flags.get('range_1h_low')}..{flags.get('range_1h_high')} "
+        f"pos={flags.get('pos_in_range_1h')} ATR={flags.get('atr_1h')}",
+        f"S={flags.get('near_S')} R={flags.get('near_R')} "
+        f"close={flags.get('last_close_1h')} "
+        f"above_R={flags.get('close_above_R')} below_S={flags.get('close_below_S')}",
+        f"sweep_hi_back={flags.get('sweep_high_close_back')} "
+        f"sweep_lo_back={flags.get('sweep_low_close_back')}",
+        f"local_H/L={flags.get('local_high_1h')}/{flags.get('local_low_1h')} "
+        f"broke_H={flags.get('broke_local_high')} broke_L={flags.get('broke_local_low')}",
+    ]
+    text = "\n".join(parts)
+    return text[:580] + "…" if len(text) > 580 else text
+
+
 def build_multi_tf_structure(
     candles_1d: list[dict[str, Any]],
     candles_4h: list[dict[str, Any]],
@@ -477,6 +579,10 @@ def build_multi_tf_structure(
     supports = sorted(set(supports), reverse=True)[:5]
     resistances = sorted(set(resistances))[:5]
 
+    near_s = supports[0] if supports else s4.get("nearest_support")
+    near_r = resistances[0] if resistances else s4.get("nearest_resistance")
+    trade_flags = compute_trade_flags(candles_4h, candles_1h, near_s, near_r)
+
     meta = {
         "bias_1w": bias_1w,
         "bias_1d": bias_1d,
@@ -493,8 +599,10 @@ def build_multi_tf_structure(
         "channel_4h": (s4.get("channel") or {}).get("type"),
         "key_supports": supports,
         "key_resistances": resistances,
-        "nearest_support": supports[0] if supports else s4.get("nearest_support"),
-        "nearest_resistance": resistances[0] if resistances else s4.get("nearest_resistance"),
+        "nearest_support": near_s,
+        "nearest_resistance": near_r,
+        "trade_flags": trade_flags,
+        "trade_flags_text": trade_flags_to_text(trade_flags),
         "history_source": "local_cache",
     }
     return (
