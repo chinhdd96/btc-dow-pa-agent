@@ -93,7 +93,11 @@ class MemoryManager:
         return self._read()
 
     def get_min_score(self) -> float:
-        return float(self._read()["system_stats"]["current_min_score"])
+        stored = float(self._read()["system_stats"]["current_min_score"])
+        # Migrate legacy thresholds (6.0 / 8.5) to new defaults on read
+        if stored in {6.0, 8.5}:
+            return config.BASE_MIN_SCORE
+        return min(stored, config.PENALTY_MIN_SCORE)
 
     def get_lessons_for_regime(self, regime: str, top_n: int = 5) -> list[dict[str, Any]]:
         data = self._read()
