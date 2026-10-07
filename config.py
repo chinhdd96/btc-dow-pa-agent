@@ -14,8 +14,15 @@ TIMEFRAME_HTF = "1d"  # primary regime như trader thực
 LEVERAGE = 3
 RISK_PER_TRADE_PCT = 0.015
 MAX_CONSECUTIVE_LOSSES = 2
-BASE_MIN_SCORE = 6.0
-PENALTY_MIN_SCORE = 8.5
+BASE_MIN_SCORE = float(os.getenv("BASE_MIN_SCORE", "5.0"))
+PENALTY_MIN_SCORE = float(os.getenv("PENALTY_MIN_SCORE", "6.5"))
+MIN_RR = float(os.getenv("MIN_RR", "1.2"))
+DOW_DIRECTION_GATE = os.getenv("DOW_DIRECTION_GATE", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 MAX_SL_DISTANCE_PCT = 0.05
 # Local history depth (Dow HTF ~1y; 1H ~3m). Structure uses full file.
 HISTORY_DIR = os.getenv("HISTORY_DIR", str(BASE_DIR / "generated" / "history"))
@@ -49,6 +56,7 @@ HISTORY_GITHUB_REPO = os.getenv(
 HISTORY_GITHUB_PATH = os.getenv(
     "HISTORY_GITHUB_PATH", "generated/decision_history.jsonl"
 ).strip()
+HISTORY_GITHUB_BRANCH = os.getenv("HISTORY_GITHUB_BRANCH", "history-data").strip()
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
