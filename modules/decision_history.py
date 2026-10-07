@@ -68,6 +68,12 @@ def rule_summary(
     """Fixed one-line summary used in the next prompt."""
     ts = ts or _iso_now()
     regime = str(decision.get("market_regime") or "REGIME_UNKNOWN")
+    state = str(decision.get("state") or "").strip()
+    try:
+        level = int(decision.get("signal_level") or 0)
+    except (TypeError, ValueError):
+        level = 0
+    level_s = f"L{level}" if level else ""
     action = str(decision.get("action") or "HOLD").upper()
     try:
         score = float(decision.get("setup_score") or 0)
@@ -86,9 +92,10 @@ def rule_summary(
     elif action == "HOLD" and wait != "n/a":
         status = f"wait_{wait.lower()}"
 
+    state_part = f"{state}|{level_s}" if state or level_s else "n/a"
     line = (
-        f"{ts} | {regime} | {action} | {score_s} | px={round(float(price), 1)} | "
-        f"{wait} | {status} | {note}"
+        f"{ts} | {regime} | {state_part} | {action} | {score_s} | "
+        f"px={round(float(price), 1)} | {wait} | {status} | {note}"
     )
     if truncate:
         max_c = config.DECISION_SUMMARY_MAX_CHARS
@@ -121,8 +128,11 @@ def _slim_for_remote(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "summary_via": r.get("summary_via", "rule"),
                 "full": {
                     "market_regime": (r.get("full") or {}).get("market_regime"),
+                    "state": (r.get("full") or {}).get("state"),
+                    "signal_level": (r.get("full") or {}).get("signal_level"),
                     "action": (r.get("full") or {}).get("action"),
                     "setup_score": (r.get("full") or {}).get("setup_score"),
+                    "win_probability": (r.get("full") or {}).get("win_probability"),
                     "reasoning": _one_line(
                         str((r.get("full") or {}).get("reasoning") or ""), 120
                     ),
@@ -143,6 +153,79 @@ def _github_headers() -> dict[str, str] | None:
     }
 
 
+def _github_contents_url(repo: str, path: str, branch: str | None = None) -> str:
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    if branch:
+        return f"{url}?ref={branch}"
+    return url
+
+
+def _ensure_history_branch(headers: dict[str, str], repo: str, branch: str) -> bool:
+    """Create history branch from main tip if missing."""
+    if not branch or branch == "main":
+        return True
+    ref_url = f"https://api.github.com/repos/{repo}/git/ref/heads/{branch}"
+    try:
+        chk = requests.get(ref_url, headers=headers, timeout=30)
+        if chk.status_code == 200:
+            return True
+        if chk.status_code != 404:
+            logger.warning("history branch check HTTP %s", chk.status_code)
+            return False
+        main_ref = requests.get(
+            f"https://api.github.com/repos/{repo}/git/ref/heads/main",
+            headers=headers,
+            timeout=30,
+        )
+        if main_ref.status_code != 200:
+            logger.warning("main ref HTTP %s", main_ref.status_code)
+            return False
+        sha = main_ref.json().get("object", {}).get("sha")
+        if not sha:
+            return False
+        create = requests.post(
+            f"https://api.github.com/repos/{repo}/git/refs",
+            headers=headers,
+            json={"ref": f"refs/heads/{branch}", "sha": sha},
+            timeout=30,
+        )
+        if create.status_code not in {201, 422}:
+            logger.warning("create branch HTTP %s: %s", create.status_code, create.text[:120])
+            return False
+        logger.info("Created GitHub branch %s for decision_history", branch)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure history branch failed: %s", exc)
+        return False
+
+
+def _fetch_remote_rows(
+    headers: dict[str, str],
+    repo: str,
+    path: str,
+    branch: str,
+) -> list[dict[str, Any]] | None:
+    url = _github_contents_url(repo, path, branch)
+    resp = requests.get(url, headers=headers, timeout=30)
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        logger.warning("history remote GET %s HTTP %s", branch, resp.status_code)
+        return None
+    data = resp.json()
+    raw = base64.b64decode(data.get("content") or "").decode("utf-8")
+    rows: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
 def backup_remote(rows: list[dict[str, Any]] | None = None) -> bool:
     """Upsert slim history JSONL to GitHub (survives Blitz rebuild)."""
     headers = _github_headers()
@@ -151,11 +234,14 @@ def backup_remote(rows: list[dict[str, Any]] | None = None) -> bool:
     rows = _slim_for_remote(rows if rows is not None else load_recent(n=10_000))
     repo = config.HISTORY_GITHUB_REPO
     path = config.HISTORY_GITHUB_PATH
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    branch = config.HISTORY_GITHUB_BRANCH or "history-data"
+    url = _github_contents_url(repo, path)
     content_b64 = base64.b64encode(_rows_to_jsonl(rows).encode("utf-8")).decode("ascii")
     sha = None
     try:
-        meta = requests.get(url, headers=headers, timeout=30)
+        if not _ensure_history_branch(headers, repo, branch):
+            return False
+        meta = requests.get(_github_contents_url(repo, path, branch), headers=headers, timeout=30)
         if meta.status_code == 200:
             sha = meta.json().get("sha")
         elif meta.status_code != 404:
@@ -164,7 +250,7 @@ def backup_remote(rows: list[dict[str, Any]] | None = None) -> bool:
         body: dict[str, Any] = {
             "message": "chore: sync decision_history for Blitz persistence",
             "content": content_b64,
-            "branch": "main",
+            "branch": branch,
         }
         if sha:
             body["sha"] = sha
@@ -174,7 +260,9 @@ def backup_remote(rows: list[dict[str, Any]] | None = None) -> bool:
                 "history remote PUT HTTP %s: %s", put.status_code, put.text[:200]
             )
             return False
-        logger.info("decision_history backed up to GitHub n=%d", len(rows))
+        logger.info(
+            "decision_history backed up to GitHub branch=%s n=%d", branch, len(rows)
+        )
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("history remote backup failed: %s", exc)
@@ -192,31 +280,19 @@ def restore_from_remote() -> int:
         return 0
     repo = config.HISTORY_GITHUB_REPO
     path = config.HISTORY_GITHUB_PATH
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    branch = config.HISTORY_GITHUB_BRANCH or "history-data"
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code == 404:
-            logger.info("No remote decision_history yet")
-            return 0
-        if resp.status_code != 200:
-            logger.warning("history remote restore HTTP %s", resp.status_code)
-            return 0
-        data = resp.json()
-        raw = base64.b64decode(data.get("content") or "").decode("utf-8")
-        rows: list[dict[str, Any]] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        rows = rows[-config.DECISION_HISTORY_MAX :]
+        rows = _fetch_remote_rows(headers, repo, path, branch)
+        source = branch
+        if rows is None:
+            rows = _fetch_remote_rows(headers, repo, path, "main")
+            source = "main"
         if not rows:
+            logger.info("No remote decision_history yet (branch=%s)", branch)
             return 0
+        rows = rows[-config.DECISION_HISTORY_MAX :]
         _write_rows(rows)
-        logger.info("decision_history restored from GitHub n=%d", len(rows))
+        logger.info("decision_history restored from GitHub branch=%s n=%d", source, len(rows))
         return len(rows)
     except Exception as exc:  # noqa: BLE001
         logger.warning("history remote restore failed: %s", exc)
