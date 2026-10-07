@@ -91,8 +91,13 @@ class Notifier:
         action = _action_vi(decision.get("action"))
         lines = [
             "BTC Dow/PA — Quyết định giao dịch",
-            f"Chế độ thị trường: {_regime_vi(decision.get('market_regime'))}",
-            f"Điểm setup: {decision.get('setup_score')} | Hành động: {action}",
+            f"Chế độ: {_regime_vi(decision.get('market_regime'))} | "
+            f"State: {decision.get('state', '')} | Bias: {decision.get('short_term_bias', '')}",
+            f"Level L{decision.get('signal_level', '?')} | "
+            f"Điểm: {decision.get('setup_score')} | "
+            f"P(win): {decision.get('win_probability')} | Hành động: {action}",
+            f"Trigger: {str(decision.get('trigger', ''))[:200]}",
+            f"Invalidation: {str(decision.get('invalidation', ''))[:200]}",
             (
                 f"Vào lệnh: {decision.get('entry_price')} | "
                 f"Cắt lỗ (SL): {decision.get('stop_loss_price')} | "
