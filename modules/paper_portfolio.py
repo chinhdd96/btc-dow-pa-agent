@@ -118,6 +118,8 @@ class PaperPortfolio:
         regime: str = "",
         order_type: str = "MARKET",
         mark_price: float | None = None,
+        signal_level: int | None = None,
+        win_probability: float | None = None,
     ) -> dict[str, Any]:
         """Đăng ký lệnh paper. MARKET khớp ngay nếu giá đã chạm entry; LIMIT chờ."""
         action = action.upper()
@@ -146,6 +148,8 @@ class PaperPortfolio:
             "order_type": order_type.upper(),
             "reasoning": reasoning,
             "regime": regime,
+            "signal_level": signal_level,
+            "win_probability": win_probability,
             "created_at": _now_iso(),
         }
         data["pending"] = pending
@@ -317,6 +321,8 @@ class PaperPortfolio:
             "reason": reason,
             "regime": position.get("regime", ""),
             "reasoning": position.get("reasoning", ""),
+            "signal_level": position.get("signal_level"),
+            "win_probability": position.get("win_probability"),
             "opened_at": position.get("filled_at"),
             "closed_at": _now_iso(),
         }
