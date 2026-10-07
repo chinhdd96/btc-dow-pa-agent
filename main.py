@@ -89,27 +89,28 @@ def validate_decision_hard(
     if action == "HOLD":
         return decision, None
 
-    bias = str(
-        primary_bias or decision.get("primary_bias") or ""
-    ).upper()
-    if "SIDEWAY" in bias:
-        decision = dict(decision)
-        decision["action"] = "HOLD"
-        reason = "Chặn Dow: primary SIDEWAY → HOLD"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if bias == "UPTREND" and action == "SELL":
-        decision = dict(decision)
-        decision["action"] = "HOLD"
-        reason = "Chặn Dow: primary UPTREND — không SELL"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if bias == "DOWNTREND" and action == "BUY":
-        decision = dict(decision)
-        decision["action"] = "HOLD"
-        reason = "Chặn Dow: primary DOWNTREND — không BUY"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
+    if config.DOW_DIRECTION_GATE:
+        bias = str(
+            primary_bias or decision.get("primary_bias") or ""
+        ).upper()
+        if "SIDEWAY" in bias:
+            decision = dict(decision)
+            decision["action"] = "HOLD"
+            reason = "Chặn Dow: primary SIDEWAY → HOLD"
+            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+            return decision, reason
+        if bias == "UPTREND" and action == "SELL":
+            decision = dict(decision)
+            decision["action"] = "HOLD"
+            reason = "Chặn Dow: primary UPTREND — không SELL"
+            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+            return decision, reason
+        if bias == "DOWNTREND" and action == "BUY":
+            decision = dict(decision)
+            decision["action"] = "HOLD"
+            reason = "Chặn Dow: primary DOWNTREND — không BUY"
+            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+            return decision, reason
 
     score = float(decision.get("setup_score") or 0)
     if score < min_score:
@@ -165,10 +166,10 @@ def validate_decision_hard(
     # Minimum R:R 1.5
     risk = abs(use_entry - float(sl))
     reward = abs(float(tp) - use_entry)
-    if risk <= 0 or reward / risk < 1.5:
+    if risk <= 0 or reward / risk < config.MIN_RR:
         decision = dict(decision)
         decision["action"] = "HOLD"
-        reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < 1.5"
+        reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < {config.MIN_RR}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
@@ -422,6 +423,8 @@ def job_trade(
                 regime=str(decision.get("market_regime", "")),
                 order_type="MARKET",
                 mark_price=price,
+                signal_level=decision.get("signal_level"),
+                win_probability=decision.get("win_probability"),
             )
             if not placed.get("ok"):
                 notifier.send(f"PAPER từ chối: {placed.get('reason')}")
