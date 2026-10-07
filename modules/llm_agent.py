@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 LLM_DECISION_PROMPT = """Bạn là Senior Crypto Quant Trader chuyên giao dịch BTCUSDT.
 
 MỤC TIÊU:
-Phân tích thị trường thực chiến và chỉ giao dịch khi có lợi thế rõ ràng.
-LÝ THUYẾT DOW và PRICE ACTION là nền tảng chính để đọc cấu trúc và tìm điểm vào,
-nhưng KHÔNG được áp dụng máy móc. Dữ liệu thị trường hiện tại luôn được ưu tiên.
+Tìm lệnh có xác suất thắng và kỳ vọng dương — ưu tiên BUY/SELL khi thấy edge.
+Dow và Price Action là nền tảng đọc thị trường, KHÔNG phải luật cứng.
+Chỉ HOLD khi thật sự không có edge hoặc không đặt được SL/TP hợp lý.
 
 DỮ LIỆU:
 
@@ -34,28 +34,24 @@ DỮ LIỆU:
 {regime_memory_lessons}
 ---
 
-2b. LỊCH SỬ QUYẾT ĐỊNH GẦN ĐÂY (tóm tắt, mới nhất ở dưới)
+2b. LỊCH SỬ QUYẾT ĐỊNH (mới nhất ở dưới)
 ---
 {decision_history}
 ---
-Đây chỉ là ngữ cảnh ngắn hạn. Ưu tiên dữ liệu cấu trúc/PA live bên dưới.
-Nếu thesis hoặc điều kiện chờ trước đó đã invalid → nêu rõ và cập nhật.
+Chỉ tham khảo. Số liệu live + trade_flags luôn ưu tiên hơn history.
 
 3. CẤU TRÚC THỊ TRƯỜNG
 
-1W:
-{structure_1w}
-
-1D:
-{structure_1d}
-
-4H:
-{structure_4h}
-
-1H:
-{structure_1h}
-
+1W: {structure_1w}
+1D: {structure_1d}
+4H: {structure_4h}
+1H: {structure_1h}
 alignment: {structure_align}
+
+4. CỜ SỐ LIỆU (Python pre-compute — kiểm tra, không suy diễn ngược)
+---
+{trade_flags}
+---
 
 ZOOM PA:
 {zoom_block}
@@ -65,99 +61,54 @@ VỊ THẾ HIỆN TẠI: {current_position}
 
 QUY TẮC PHÂN TÍCH:
 
-1. Dùng Dow để xác định cấu trúc chính:
-   HH, HL, LH, LL, xu hướng, vùng giá quan trọng và sự thay đổi cấu trúc.
+1. Chuỗi: STRUCTURE → STATE → BIAS → TRIGGER → THESIS + INVALIDATION → R:R.
+   Structure: UPTREND/DOWNTREND/RANGE. State: FAILED_BREAKOUT/RETEST/SWEEP/...
+   Bias ngắn hạn có thể ngược 1D nếu nêu lý do.
 
-2. Dùng Price Action để tìm thời điểm vào:
-   rejection, breakout, failed breakout, retest, engulfing, pinbar,
-   compression, expansion và các hành vi giá đáng chú ý khác.
+2. RANGE ≠ HOLD. Giữa range → HOLD. Biên range + PA xác nhận → trade.
 
-3. Không bắt buộc 1D/4H/1H phải cùng một hướng.
-   Hãy xác định timeframe nào đang dẫn dắt và timeframe nào đang xác nhận
-   hoặc mâu thuẫn.
+3. FAILED BREAKOUT / LIQUIDITY SWEEP là trigger hợp lệ — không cần pinbar/engulfing.
+   PA: failed breakout, rejection, sweep, break local structure, LH/HL, retest fail,
+   compression→expansion, reclaim/loss of level, displacement, consecutive closes.
 
-4. TÁCH CẤU TRÚC VÀ TRẠNG THÁI THỊ TRƯỜNG:
+4. Kiểm tra số (trade_flags + OHLC zoom):
+   - KHÔNG gọi breakout nếu close chưa vượt level.
+   - KHÔNG gọi breakdown nếu close chưa dưới level.
 
-Cấu trúc chính chỉ gồm: UPTREND / DOWNTREND / RANGE.
+5. signal_level: L1 (<5 điểm, quan sát) | L2 (5–7, có trigger) | L3 (>7, nhiều xác nhận).
+   setup_score = chất lượng 0–10. win_probability = xác suất thắng 0–1.
+   Ngưỡng tham chiếu: {min_score_required}. R:R tối thiểu: {min_rr}.
 
-Nhưng RANGE không đồng nghĩa HOLD. Hãy xác định thêm trạng thái:
-BREAKOUT_ATTEMPT / BREAKOUT_CONFIRMED / FAILED_BREAKOUT / RETEST / REJECTION / CONSOLIDATION.
+6. BUY/SELL: entry + SL (sau invalidation + buffer ATR) + TP + R:R ≥ {min_rr}.
+   HOLD → entry/SL/TP/R:R = null.
 
-Không máy móc:
-UPTREND = BUY
-DOWNTREND = SELL
-RANGE = HOLD.
+CẤM: "thiếu dữ liệu" — suy luận từ structure + trade_flags + CSV.
 
-Khi giá gần biên range hoặc Key Level, hãy xem đó là DECISION POINT và tìm dấu hiệu:
-breakout, acceptance, rejection, failed breakout, retest, liquidity sweep,
-compression, expansion, momentum và thay đổi cấu trúc.
-
-Không cần pinbar/engulfing mới được coi là Price Action.
-
-Không BUY chỉ vì vừa breakout; ưu tiên breakout + acceptance/retest.
-Không SELL chỉ vì bị từ chối một lần; cần rejection/failed breakout + xác nhận cấu trúc.
-
-Nếu 1D tăng nhưng 4H range → mô tả "bullish bias + 4H consolidation",
-không gọi toàn bộ thị trường là SIDEWAY.
-
-5. Luôn đánh giá:
-- Giá đang ở đâu trong cấu trúc?
-- Đang ở Key Level hay giữa range?
-- Thị trường đang tích lũy, breakout hay rejection?
-- Có TRIGGER + INVALIDATION + R:R hợp lý chưa?
-- Điều gì ủng hộ và điều gì làm thesis sai?
-
-6. MEMORY và LỊCH SỬ QUYẾT ĐỊNH chỉ là tham khảo.
-   Dữ liệu thị trường hiện tại luôn được ưu tiên; không neo cứng vào narrative cũ.
-
-7. Không ép giao dịch. Nếu chưa có edge rõ → HOLD và ghi rõ điều kiện chờ:
-BREAKOUT / RETEST / REJECTION / PULLBACK.
-
-Chỉ BUY/SELL khi có:
-THESIS + KEY LEVEL + TRIGGER + INVALIDATION + R:R.
-
-setup_score là đánh giá chất lượng setup trên thang 0–10 (số thực, ví dụ 6.5).
-KHÔNG dùng thang 0–1 hay 0–100. Python sẽ chuẩn hóa/clamp về 0–10.
-setup_score không phải điều kiện bắt buộc để BUY/SELL — tầng Python kiểm min_score.
-
-LƯU Ý EXECUTION:
-Tầng Python có thể chặn lệnh ngược primary_bias 1D hoặc khi primary SIDEWAY.
-Vẫn mô tả transition/edge trung thực; nếu bị chặn thì action=HOLD và giải thích trong reasoning.
-Ngưỡng điểm tối thiểu hiện tại (Python): {min_score_required} — chỉ để tham chiếu, không tự ép HOLD vì điểm.
-
-ĐIỂM QUAN TRỌNG:
-Hãy suy nghĩ như một trader thực chiến:
-không cố chứng minh lý thuyết đúng,
-mà dùng lý thuyết để hiểu thị trường và tìm cơ hội có xác suất/lợi thế tốt.
-
-CẤM: Không trả lời kiểu "thiếu dữ liệu / không đủ nến" —
-luôn suy luận từ block pre-compute + CSV đã cung cấp.
-
-OUTPUT:
-Chỉ trả về đúng 1 JSON object, không markdown, không ```.
-Bắt đầu bằng {{ và kết thúc bằng }}.
-action chỉ nhận: BUY | SELL | HOLD.
-market_regime = REGIME_{{CẤU_TRÚC}}_{{TRẠNG_THÁI}} khi có trạng thái
-(ví dụ REGIME_RANGE_BREAKOUT_ATTEMPT, REGIME_UPTREND_RETEST),
-hoặc REGIME_UPTREND / REGIME_DOWNTREND / REGIME_RANGE nếu chưa rõ trạng thái.
-Các trường mô tả viết bằng tiếng Việt.
+OUTPUT: 1 JSON, không markdown. action: BUY|SELL|HOLD.
+market_regime = REGIME_{{CẤU_TRÚC}}_{{TRẠNG_THÁI}}. Text tiếng Việt.
 
 FORMAT:
 {{
-  "market_regime": "REGIME_RANGE_BREAKOUT_ATTEMPT",
-  "dow_structure_analysis": "Mô tả cấu trúc Dow bằng tiếng Việt",
-  "price_action_signal": "Mô tả tín hiệu PA bằng tiếng Việt",
-  "market_location": "Giá đang ở đâu trong cấu trúc (tiếng Việt)",
-  "setup_score": 7.5,
-  "action": "HOLD",
-  "entry_price": null,
-  "stop_loss_price": null,
-  "take_profit_price": null,
-  "risk_reward_ratio": null,
-  "reasoning": "Lý do BUY/SELL/HOLD bằng tiếng Việt"
+  "structure": "RANGE",
+  "state": "FAILED_BREAKOUT",
+  "short_term_bias": "bearish",
+  "trigger": "Sweep R + close back inside + break local low",
+  "invalidation": "Reclaim resistance",
+  "target_logic": "Range midpoint / range low",
+  "signal_level": 2,
+  "win_probability": 0.62,
+  "market_regime": "REGIME_RANGE_FAILED_BREAKOUT",
+  "dow_structure_analysis": "Mô tả Dow",
+  "price_action_signal": "Mô tả PA",
+  "market_location": "Vị trí giá",
+  "setup_score": 6.5,
+  "action": "SELL",
+  "entry_price": 86500.0,
+  "stop_loss_price": 87200.0,
+  "take_profit_price": 84800.0,
+  "risk_reward_ratio": 2.4,
+  "reasoning": "Lý do BUY/SELL/HOLD"
 }}
-
-Nếu HOLD: entry_price, stop_loss_price, take_profit_price, risk_reward_ratio = null.
 """
 
 POST_MORTEM_PROMPT = """Bạn là AI Risk Officer phụ trách phân tích hậu phẫu (Post-Mortem) lệnh giao dịch vừa đóng.
@@ -185,6 +136,14 @@ mistake_or_insight và actionable_rule BẮT BUỘC viết bằng TIẾNG VIỆT
 """
 
 HOLD_DECISION: dict[str, Any] = {
+    "structure": "RANGE",
+    "state": "UNKNOWN",
+    "short_term_bias": "neutral",
+    "trigger": "",
+    "invalidation": "",
+    "target_logic": "",
+    "signal_level": 1,
+    "win_probability": 0.0,
     "market_regime": "REGIME_SIDEWAY_CHOP",
     "dow_structure_analysis": "Không phân tích được (fallback)",
     "price_action_signal": "Không có",
@@ -486,6 +445,8 @@ def _build_decision_prompt(
 
     hist_lines = _fit_hist_budget(hist_lines)
     hist_txt = _join_hist(hist_lines)
+    trade_flags_txt = str(meta.get("trade_flags_text") or "(không có trade_flags)")
+    min_rr = config.MIN_RR
 
     def _assemble(
         m_budget: int,
@@ -503,6 +464,7 @@ def _build_decision_prompt(
             structure_4h=struct_4h,
             structure_1h=struct_1h,
             structure_align=align,
+            trade_flags=trade_flags_txt,
             zoom_block=_zoom_block(
                 candles_4h,
                 candles_1h,
@@ -515,6 +477,7 @@ def _build_decision_prompt(
             current_price=current_price,
             current_position=pos,
             min_score_required=min_score_required,
+            min_rr=min_rr,
         )
 
     prompt = _assemble(mem_budget, bars_1h, n4=0, with_vol=False)
@@ -782,17 +745,13 @@ class LLMAgent:
         )
 
         system = (
-            "Bạn là Senior Crypto Quant Trader Dow/PA. Chỉ trả về 1 JSON hợp lệ, "
-            "không markdown. Phân tích thực chiến: tách cấu trúc "
-            "(UPTREND/DOWNTREND/RANGE) và trạng thái "
-            "(BREAKOUT_ATTEMPT/BREAKOUT_CONFIRMED/FAILED_BREAKOUT/RETEST/...). "
-            "market_regime dạng REGIME_RANGE_BREAKOUT_ATTEMPT khi phù hợp. "
-            "Các trường mô tả PHẢI tiếng Việt. "
-            "BUY/SELL chỉ khi thesis+level+trigger+invalidation+R:R. "
-            "setup_score BẮT BUỘC thang 0–10 (không 0–1, không 0–100); "
-            "Python tự kiểm min_score. "
-            "Lịch sử quyết định chỉ là ngữ cảnh — ưu tiên dữ liệu live. "
-            "Không nói thiếu dữ liệu."
+            "Bạn là Senior Crypto Quant Trader. Trả về 1 JSON hợp lệ, không markdown. "
+            "Mục tiêu: tìm cơ hội có edge và vào lệnh khi hợp lý — không quá an toàn. "
+            "Dow/PA là nền tảng, không phải luật cứng. RANGE có thể trade ở biên. "
+            "Failed breakout/sweep là trigger hợp lệ. "
+            "Đối chiếu trade_flags trước khi kết luận breakout/breakdown. "
+            "setup_score 0–10, win_probability 0–1, signal_level 1–3. "
+            "BUY/SELL cần SL/TP hợp lý. Text tiếng Việt."
         )
 
         try:
@@ -806,13 +765,13 @@ class LLMAgent:
                 )
                 repair = (
                     f"Giá={current_price}. primary_bias={struct_meta.get('primary_bias')}.\n"
-                    "Chỉ trả về 1 JSON với các key: "
+                    "Chỉ trả về 1 JSON với các key: structure, state, short_term_bias, "
+                    "trigger, invalidation, target_logic, signal_level, win_probability, "
                     "market_regime, dow_structure_analysis, price_action_signal, "
                     "market_location, setup_score, action, entry_price, "
                     "stop_loss_price, take_profit_price, risk_reward_ratio, reasoning.\n"
-                    "market_regime ví dụ REGIME_RANGE_BREAKOUT_ATTEMPT. "
-                    "setup_score số thực 0–10. Text tiếng Việt. "
-                    "Chưa edge → HOLD, giá = null."
+                    "setup_score 0–10, signal_level 1–3, win_probability 0–1. "
+                    "Text tiếng Việt. Chưa edge → HOLD, giá = null."
                 )
                 raw2 = self._chat(system=system, user=repair, temperature=0)
                 decision = extract_json_object(raw2)
@@ -854,7 +813,27 @@ class LLMAgent:
         if not regime.startswith("REGIME_"):
             regime = f"REGIME_{regime}" if regime else "REGIME_SIDEWAY_CHOP"
 
+        try:
+            signal_level = int(decision.get("signal_level") or 1)
+        except (TypeError, ValueError):
+            signal_level = 1
+        signal_level = max(1, min(3, signal_level))
+
+        try:
+            win_prob = float(decision.get("win_probability") or 0)
+        except (TypeError, ValueError):
+            win_prob = 0.0
+        win_prob = max(0.0, min(1.0, round(win_prob, 3)))
+
         out = {
+            "structure": str(decision.get("structure") or ""),
+            "state": str(decision.get("state") or ""),
+            "short_term_bias": str(decision.get("short_term_bias") or ""),
+            "trigger": str(decision.get("trigger") or ""),
+            "invalidation": str(decision.get("invalidation") or ""),
+            "target_logic": str(decision.get("target_logic") or ""),
+            "signal_level": signal_level,
+            "win_probability": win_prob,
             "market_regime": regime,
             "dow_structure_analysis": decision.get("dow_structure_analysis", ""),
             "price_action_signal": decision.get("price_action_signal", ""),
@@ -868,12 +847,6 @@ class LLMAgent:
             "reasoning": decision.get("reasoning", ""),
         }
 
-        if action in {"BUY", "SELL"} and score < min_score_required:
-            out["action"] = "HOLD"
-            out["reasoning"] = (
-                f"Điểm {score} < ngưỡng tối thiểu {min_score_required}. "
-                f"Gốc: {out['reasoning']}"
-            )
         return out
 
     def run_post_mortem(
