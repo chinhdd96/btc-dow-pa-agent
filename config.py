@@ -57,6 +57,10 @@ HISTORY_GITHUB_PATH = os.getenv(
     "HISTORY_GITHUB_PATH", "generated/decision_history.jsonl"
 ).strip()
 HISTORY_GITHUB_BRANCH = os.getenv("HISTORY_GITHUB_BRANCH", "history-data").strip()
+# Paper account JSON on same branch (survives Blitz rebuild wipe of generated/)
+PAPER_GITHUB_PATH = os.getenv(
+    "PAPER_GITHUB_PATH", "generated/paper_account.json"
+).strip()
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
