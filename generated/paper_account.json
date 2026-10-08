@@ -8,7 +8,7 @@
   "position": {
     "action": "SELL",
     "entry": 80900.0,
-    "stop_loss": 82960.0,
+    "stop_loss": 80800.0,
     "initial_stop_loss": 82960.0,
     "take_profit": 77000.0,
     "margin": 100.0,
@@ -24,7 +24,8 @@
     "invalidation": "Reclaim of the broken low (price closes back above the low) would invalidate",
     "created_at": "2026-10-08T15:59:28.704839+00:00",
     "filled_at": "2026-10-08T15:59:41.816179+00:00",
-    "fill_price": 80900.0
+    "fill_price": 80900.0,
+    "sl_updated_at": "2026-10-08T17:58:49.359615+00:00"
   },
   "closed_trades": [
     {
