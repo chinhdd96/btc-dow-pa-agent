@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 1003.2690890972959,
+  "balance": 1003.6399172802378,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 80900.0,
-    "stop_loss": 80800.0,
-    "initial_stop_loss": 82960.0,
-    "take_profit": 77000.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.003708281829419036,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Với xu hướng giảm trên 1H, phá vỡ low địa phương và tín hiệu bearish marubozu, khả năng tiếp tục xu hướng giảm là cao. SL đặt trên đỉnh của nến bearish gần nhất (≈82660) cộng buffer ATR để tránh nhiễu, TP hướng tới mức hỗ trợ mạnh trước đó (~77000) cho R:R > 1.8, đáp ứng tiêu chí edge dương.",
-    "regime": "REGIME_RANGE_BREAKDOWN",
-    "signal_level": 3,
-    "win_probability": 0.64,
-    "trigger": "Break of local low accompanied by bearish marubozu confirming downtrend",
-    "invalidation": "Reclaim of the broken low (price closes back above the low) would invalidate",
-    "created_at": "2026-10-08T15:59:28.704839+00:00",
-    "filled_at": "2026-10-08T15:59:41.816179+00:00",
-    "fill_price": 80900.0,
-    "sl_updated_at": "2026-10-08T17:58:49.359615+00:00"
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -81,12 +60,30 @@
       "win_probability": 0.62,
       "opened_at": "2026-10-08T14:43:08.901697+00:00",
       "closed_at": "2026-10-08T15:43:13.254913+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 80900.0,
+      "exit": 80800.0,
+      "sl": 80800.0,
+      "tp": 77000.0,
+      "quantity": 0.003708281829419036,
+      "margin": 100.0,
+      "pnl": 0.3708,
+      "result": "WIN",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_BREAKDOWN",
+      "reasoning": "Với xu hướng giảm trên 1H, phá vỡ low địa phương và tín hiệu bearish marubozu, khả năng tiếp tục xu hướng giảm là cao. SL đặt trên đỉnh của nến bearish gần nhất (≈82660) cộng buffer ATR để tránh nhiễu, TP hướng tới mức hỗ trợ mạnh trước đó (~77000) cho R:R > 1.8, đáp ứng tiêu chí edge dương.",
+      "signal_level": 3,
+      "win_probability": 0.64,
+      "opened_at": "2026-10-08T15:59:41.816179+00:00",
+      "closed_at": "2026-10-08T18:59:01.751003+00:00"
     }
   ],
   "stats": {
-    "total_trades": 3,
-    "wins": 2,
+    "total_trades": 4,
+    "wins": 3,
     "losses": 1,
-    "realized_pnl": 3.2690890972958693
+    "realized_pnl": 3.639917280237773
   }
 }
