@@ -1019,16 +1019,18 @@ class LLMAgent:
             "signal_level": signal_level,
             "win_probability": win_prob,
             "market_regime": regime,
-            "dow_structure_analysis": decision.get("dow_structure_analysis", ""),
-            "price_action_signal": decision.get("price_action_signal", ""),
-            "market_location": decision.get("market_location", ""),
+            "dow_structure_analysis": str(
+                decision.get("dow_structure_analysis") or ""
+            ),
+            "price_action_signal": str(decision.get("price_action_signal") or ""),
+            "market_location": str(decision.get("market_location") or ""),
             "setup_score": score,
             "action": action,
             "entry_price": _to_float(decision.get("entry_price")),
             "stop_loss_price": _to_float(decision.get("stop_loss_price")),
             "take_profit_price": _to_float(decision.get("take_profit_price")),
             "risk_reward_ratio": _to_float(decision.get("risk_reward_ratio")),
-            "reasoning": decision.get("reasoning", ""),
+            "reasoning": str(decision.get("reasoning") or ""),
         }
 
         return out
