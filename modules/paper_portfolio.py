@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import requests
 
 import config
 
@@ -16,6 +19,160 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _paper_path() -> Path:
+    return Path(config.PATHS["PAPER_ACCOUNT"])
+
+
+def _slim_for_remote(data: dict[str, Any]) -> dict[str, Any]:
+    """Keep account state; trim closed_trades tail for GitHub size."""
+    out = dict(data)
+    trades = list(out.get("closed_trades") or [])
+    out["closed_trades"] = trades[-50:]
+    return out
+
+
+def _github_headers() -> dict[str, str] | None:
+    tok = config.HISTORY_GITHUB_TOKEN
+    if not tok:
+        return None
+    return {
+        "Authorization": f"token {tok}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "btc-dow-pa-agent-paper",
+    }
+
+
+def backup_remote(data: dict[str, Any] | None = None) -> bool:
+    """Upsert paper_account.json to history-data branch (Blitz rebuild-safe)."""
+    headers = _github_headers()
+    if not headers:
+        return False
+    path_local = _paper_path()
+    if data is None:
+        if not path_local.exists():
+            return False
+        try:
+            data = json.loads(path_local.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+    payload = _slim_for_remote(data)
+    repo = config.HISTORY_GITHUB_REPO
+    remote_path = config.PAPER_GITHUB_PATH
+    branch = config.HISTORY_GITHUB_BRANCH or "history-data"
+    content_b64 = base64.b64encode(
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    ).decode("ascii")
+    try:
+        from modules.decision_history import (
+            _ensure_history_branch,
+            _github_contents_url,
+        )
+
+        if not _ensure_history_branch(headers, repo, branch):
+            return False
+        meta = requests.get(
+            _github_contents_url(repo, remote_path, branch),
+            headers=headers,
+            timeout=30,
+        )
+        sha = None
+        if meta.status_code == 200:
+            sha = meta.json().get("sha")
+        elif meta.status_code != 404:
+            logger.warning("paper remote GET HTTP %s", meta.status_code)
+            return False
+        body: dict[str, Any] = {
+            "message": "chore: sync paper_account for Blitz persistence",
+            "content": content_b64,
+            "branch": branch,
+        }
+        if sha:
+            body["sha"] = sha
+        put = requests.put(
+            _github_contents_url(repo, remote_path),
+            headers=headers,
+            json=body,
+            timeout=60,
+        )
+        if put.status_code not in {200, 201}:
+            logger.warning(
+                "paper remote PUT HTTP %s: %s", put.status_code, put.text[:200]
+            )
+            return False
+        logger.info(
+            "paper_account backed up to GitHub branch=%s bal=%.2f",
+            branch,
+            float(payload.get("balance") or 0),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("paper remote backup failed: %s", exc)
+        return False
+
+
+def restore_from_remote() -> bool:
+    """If local paper_account missing, pull from GitHub. Returns True if restored."""
+    path = _paper_path()
+    if path.exists():
+        return False
+    headers = _github_headers()
+    if not headers:
+        logger.info("No HISTORY_GITHUB_TOKEN — skip paper restore")
+        return False
+    repo = config.HISTORY_GITHUB_REPO
+    remote_path = config.PAPER_GITHUB_PATH
+    branch = config.HISTORY_GITHUB_BRANCH or "history-data"
+    try:
+        from modules.decision_history import _github_contents_url
+
+        def _load(br: str) -> dict[str, Any] | None:
+            resp = requests.get(
+                _github_contents_url(repo, remote_path, br),
+                headers=headers,
+                timeout=30,
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                logger.warning("paper remote GET %s HTTP %s", br, resp.status_code)
+                return None
+            raw = base64.b64decode(resp.json().get("content") or "").decode("utf-8")
+            return json.loads(raw)
+
+        data = _load(branch)
+        source = branch
+        if data is None:
+            data = _load("main")
+            source = "main"
+        if not data or not isinstance(data, dict):
+            logger.info("No remote paper_account yet (branch=%s)", branch)
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(
+            "paper_account restored from GitHub branch=%s bal=%.2f started=%s",
+            source,
+            float(data.get("balance") or 0),
+            data.get("started_at"),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("paper remote restore failed: %s", exc)
+        return False
+
+
+def ensure_restored() -> bool:
+    """Call once at process start before PaperPortfolio() — never overwrites local."""
+    path = _paper_path()
+    if path.exists():
+        logger.info("paper_account local exists — keep as-is")
+        return False
+    return restore_from_remote()
 
 
 class PaperPortfolio:
@@ -28,7 +185,8 @@ class PaperPortfolio:
     def __init__(self, path: str | None = None) -> None:
         self.path = Path(path or config.PATHS["PAPER_ACCOUNT"])
         if not self.path.exists():
-            self._write(self._default())
+            # Don't backup fresh default — would overwrite remote after failed restore
+            self._write(self._default(), backup=False)
 
     def _default(self) -> dict[str, Any]:
         return {
@@ -53,7 +211,7 @@ class PaperPortfolio:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = self._default()
-            self._write(data)
+            self._write(data, backup=False)
         data.setdefault("stats", {"total_trades": 0, "wins": 0, "losses": 0, "realized_pnl": 0.0})
         data.setdefault("closed_trades", [])
         data.setdefault("pending", None)
@@ -63,7 +221,7 @@ class PaperPortfolio:
         data.setdefault("started_at", _now_iso())
         return data
 
-    def _write(self, data: dict[str, Any]) -> None:
+    def _write(self, data: dict[str, Any], *, backup: bool = True) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
@@ -75,6 +233,11 @@ class PaperPortfolio:
             json.dump(data, tmp, ensure_ascii=False, indent=2)
             tmp_name = tmp.name
         Path(tmp_name).replace(self.path)
+        if backup:
+            try:
+                backup_remote(data)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("paper backup after write failed: %s", exc)
 
     def balance(self) -> float:
         return float(self._read()["balance"])
