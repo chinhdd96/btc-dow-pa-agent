@@ -4,7 +4,25 @@
   "balance": 1003.6399172802378,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "SELL",
+    "entry": 81480.0,
+    "stop_loss": 81850.0,
+    "initial_stop_loss": 81850.0,
+    "take_profit": 80600.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.003681885125184094,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Trong môi trường range dài hạn, xu hướng ngắn hạn vẫn bearish. Một failed breakout trên mức kháng cự 81500 đã tạo tín hiệu bán. Với SL đặt trên mức kháng cự + buffer ATR và TP ở mức hỗ trợ dưới, R:R > 2, xác suất thắng ước tính trên 60%, đáp ứng tiêu chí edge và kỳ vọng dương.",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.62,
+    "trigger": "Failed breakout above resistance 81500 with price sweeping high then closing back below the level",
+    "invalidation": "Price retests or breaks above resistance 81500",
+    "created_at": "2026-10-08T18:59:16.456178+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
