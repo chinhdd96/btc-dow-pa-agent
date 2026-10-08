@@ -1,28 +1,10 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 1003.6399172802378,
+  "balance": 1002.6461764849506,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": {
-    "action": "SELL",
-    "entry": 81480.0,
-    "stop_loss": 81850.0,
-    "initial_stop_loss": 81850.0,
-    "take_profit": 80600.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.003681885125184094,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Trong môi trường range dài hạn, xu hướng ngắn hạn vẫn bearish. Một failed breakout trên mức kháng cự 81500 đã tạo tín hiệu bán. Với SL đặt trên mức kháng cự + buffer ATR và TP ở mức hỗ trợ dưới, R:R > 2, xác suất thắng ước tính trên 60%, đáp ứng tiêu chí edge và kỳ vọng dương.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.62,
-    "trigger": "Failed breakout above resistance 81500 with price sweeping high then closing back below the level",
-    "invalidation": "Price retests or breaks above resistance 81500",
-    "created_at": "2026-10-08T18:59:16.456178+00:00"
-  },
+  "pending": null,
   "position": null,
   "closed_trades": [
     {
@@ -96,12 +78,30 @@
       "win_probability": 0.64,
       "opened_at": "2026-10-08T15:59:41.816179+00:00",
       "closed_at": "2026-10-08T18:59:01.751003+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 81480.0,
+      "exit": 81749.9,
+      "sl": 81850.0,
+      "tp": 80600.0,
+      "quantity": 0.003681885125184094,
+      "margin": 100.0,
+      "pnl": -0.9937,
+      "result": "LOSS",
+      "reason": "MANAGE_CLOSE",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Trong môi trường range dài hạn, xu hướng ngắn hạn vẫn bearish. Một failed breakout trên mức kháng cự 81500 đã tạo tín hiệu bán. Với SL đặt trên mức kháng cự + buffer ATR và TP ở mức hỗ trợ dưới, R:R > 2, xác suất thắng ước tính trên 60%, đáp ứng tiêu chí edge và kỳ vọng dương.",
+      "signal_level": 2,
+      "win_probability": 0.62,
+      "opened_at": "2026-10-08T18:59:18.755278+00:00",
+      "closed_at": "2026-10-08T19:59:31.687273+00:00"
     }
   ],
   "stats": {
-    "total_trades": 4,
+    "total_trades": 5,
     "wins": 3,
-    "losses": 1,
-    "realized_pnl": 3.639917280237773
+    "losses": 2,
+    "realized_pnl": 2.6461764849506073
   }
 }
