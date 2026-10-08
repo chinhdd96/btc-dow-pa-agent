@@ -28,6 +28,7 @@ from modules.llm_agent import LLMAgent
 from modules.memory_manager import MemoryManager
 from modules.news_crawler import run_news_crawler
 from modules.notifier import Notifier
+from modules import paper_portfolio as paper_portfolio_mod
 from modules.paper_portfolio import PaperPortfolio
 
 logging.basicConfig(
@@ -826,13 +827,19 @@ def safe_trade_job(
 
 def main() -> None:
     logger.info("Starting BTC Dow/PA Mono-Agent")
-    # Restore decision history from GitHub if local empty (Blitz rebuild-safe)
+    # Restore decision history + paper account from GitHub if local empty
+    # (Blitz rebuild wipes generated/ — keep balance/days across rebuilds)
     try:
         restored = decision_history.ensure_restored()
         if restored:
             logger.info("Restored %d decision_history rows from remote", restored)
     except Exception as exc:  # noqa: BLE001
         logger.warning("decision_history restore skipped: %s", exc)
+    try:
+        if config.PAPER_MODE and paper_portfolio_mod.ensure_restored():
+            logger.info("Restored paper_account from remote")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("paper_account restore skipped: %s", exc)
     memory = MemoryManager()
     llm = LLMAgent()
     notifier = Notifier()
