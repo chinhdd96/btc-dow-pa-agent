@@ -67,6 +67,29 @@ def rule_summary(
 ) -> str:
     """Fixed one-line summary used in the next prompt."""
     ts = ts or _iso_now()
+    manage_action = str(decision.get("manage_action") or "").upper()
+    if manage_action or str(decision.get("action") or "").upper().startswith("MANAGE_"):
+        act = manage_action or str(decision.get("action") or "").replace("MANAGE_", "")
+        thesis = str(decision.get("thesis_status") or decision.get("state") or "")
+        try:
+            score = float(decision.get("manage_score") or decision.get("setup_score") or 0)
+            score_s = f"{score:.1f}"
+        except (TypeError, ValueError):
+            score_s = "?"
+        note = _one_line(str(decision.get("reasoning") or ""), 120 if not truncate else 70)
+        sl_part = ""
+        if decision.get("new_stop_loss") is not None:
+            sl_part = f" | newSL={decision.get('new_stop_loss')}"
+        line = (
+            f"{ts} | MANAGE | {act} | {thesis} | {score_s} | "
+            f"px={round(float(price), 1)}{sl_part} | {note}"
+        )
+        if truncate:
+            max_c = config.DECISION_SUMMARY_MAX_CHARS
+            if len(line) > max_c:
+                line = line[: max_c - 1] + "…"
+        return line
+
     regime = str(decision.get("market_regime") or "REGIME_UNKNOWN")
     state = str(decision.get("state") or "").strip()
     try:
