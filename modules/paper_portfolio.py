@@ -120,6 +120,8 @@ class PaperPortfolio:
         mark_price: float | None = None,
         signal_level: int | None = None,
         win_probability: float | None = None,
+        trigger: str = "",
+        invalidation: str = "",
     ) -> dict[str, Any]:
         """Đăng ký lệnh paper. MARKET khớp ngay nếu giá đã chạm entry; LIMIT chờ."""
         action = action.upper()
@@ -140,6 +142,7 @@ class PaperPortfolio:
             "action": action,
             "entry": float(entry),
             "stop_loss": float(stop_loss),
+            "initial_stop_loss": float(stop_loss),
             "take_profit": float(take_profit),
             "margin": margin,
             "leverage": int(config.LEVERAGE),
@@ -150,6 +153,8 @@ class PaperPortfolio:
             "regime": regime,
             "signal_level": signal_level,
             "win_probability": win_probability,
+            "trigger": trigger,
+            "invalidation": invalidation,
             "created_at": _now_iso(),
         }
         data["pending"] = pending
@@ -191,6 +196,9 @@ class PaperPortfolio:
                     **pending,
                     "filled_at": _now_iso(),
                     "fill_price": float(pending["entry"]),
+                    "initial_stop_loss": float(
+                        pending.get("initial_stop_loss") or pending["stop_loss"]
+                    ),
                 }
                 data["pending"] = None
                 data["position"] = pos
@@ -281,6 +289,63 @@ class PaperPortfolio:
             if price <= tp:
                 return tp, "TP"
         return None
+
+    def cancel_pending(self) -> dict[str, Any]:
+        """Hủy lệnh chờ khớp (manage CANCEL_PENDING)."""
+        data = self._read()
+        pending = data.get("pending")
+        if not pending:
+            return {"ok": False, "reason": "No pending order"}
+        data["pending"] = None
+        self._write(data)
+        logger.info("Paper CANCEL_PENDING %s @ %s", pending.get("action"), pending.get("entry"))
+        return {
+            "ok": True,
+            "event": "cancelled",
+            "pending": pending,
+            "balance": self.balance(),
+        }
+
+    def close_now(
+        self,
+        mark_price: float,
+        reason: str = "MANAGE_CLOSE",
+    ) -> dict[str, Any]:
+        """Đóng position đang mở theo giá mark (manage CLOSE)."""
+        data = self._read()
+        position = data.get("position")
+        if not position:
+            return {"ok": False, "reason": "No open position"}
+        closed = self._close_position(data, position, float(mark_price), reason)
+        logger.info(
+            "Paper CLOSE_NOW %s pnl=%.4f bal=%.2f",
+            reason,
+            closed["pnl"],
+            closed["balance"],
+        )
+        return {"ok": True, **closed}
+
+    def update_stop_loss(self, new_sl: float) -> dict[str, Any]:
+        """Cập nhật SL (manage TRAIL). Caller phải đã validate chặt hơn."""
+        data = self._read()
+        position = data.get("position")
+        if not position:
+            return {"ok": False, "reason": "No open position"}
+        old_sl = float(position["stop_loss"])
+        if position.get("initial_stop_loss") is None:
+            position["initial_stop_loss"] = old_sl
+        position["stop_loss"] = float(new_sl)
+        position["sl_updated_at"] = _now_iso()
+        data["position"] = position
+        self._write(data)
+        logger.info("Paper TRAIL SL %s → %s", old_sl, new_sl)
+        return {
+            "ok": True,
+            "event": "trail",
+            "old_sl": old_sl,
+            "new_sl": float(new_sl),
+            "position": position,
+        }
 
     def _close_position(
         self,
