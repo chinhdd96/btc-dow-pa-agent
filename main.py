@@ -177,6 +177,135 @@ def validate_decision_hard(
     return decision, None
 
 
+def validate_manage_hard(
+    decision: dict[str, Any],
+    *,
+    position: dict[str, Any] | None,
+    pending: dict[str, Any] | None,
+    mark: float,
+) -> tuple[dict[str, Any], str | None]:
+    """Python hard gates for paper manage mode."""
+    decision = dict(decision)
+    action = str(decision.get("manage_action") or "HOLD").upper()
+    thesis = str(decision.get("thesis_status") or "INTACT").upper()
+    try:
+        score = float(decision.get("manage_score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+
+    if position:
+        allowed = {"HOLD", "CLOSE", "TRAIL"}
+    elif pending:
+        allowed = {"HOLD", "CANCEL_PENDING"}
+    else:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        return decision, "Không có exposure"
+
+    if action not in allowed:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn manage: {action} không hợp lệ khi {'position' if position else 'pending'}"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
+    if action == "HOLD":
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        return decision, None
+
+    if score < config.MANAGE_MIN_SCORE:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn manage: điểm {score} < {config.MANAGE_MIN_SCORE}"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
+    if action == "CLOSE":
+        if thesis not in {"INVALIDATED", "WEAKENING"}:
+            decision["manage_action"] = "HOLD"
+            decision["action"] = "MANAGE_HOLD"
+            reason = f"Chặn CLOSE: thesis_status={thesis} (cần WEAKENING/INVALIDATED)"
+            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+            return decision, reason
+        decision["manage_action"] = "CLOSE"
+        decision["action"] = "MANAGE_CLOSE"
+        return decision, None
+
+    if action == "CANCEL_PENDING":
+        decision["manage_action"] = "CANCEL_PENDING"
+        decision["action"] = "MANAGE_CANCEL_PENDING"
+        return decision, None
+
+    # TRAIL
+    new_sl = decision.get("new_stop_loss")
+    if new_sl is None:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = "Chặn TRAIL: thiếu new_stop_loss"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
+    pos = position or {}
+    side = str(pos.get("action") or "").upper()
+    entry = float(pos.get("fill_price") or pos.get("entry") or 0)
+    old_sl = float(pos.get("stop_loss") or 0)
+    initial_sl = float(pos.get("initial_stop_loss") or old_sl)
+    qty = float(pos.get("quantity") or 0)
+    new_sl_f = float(new_sl)
+
+    if side == "BUY":
+        upnl = qty * (mark - entry)
+        tighter = new_sl_f > old_sl
+        at_or_beyond_be = new_sl_f >= entry
+        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
+        locked_r = ((new_sl_f - entry) / r_dist) if r_dist > 0 else 0.0
+    elif side == "SELL":
+        upnl = qty * (entry - mark)
+        tighter = new_sl_f < old_sl
+        at_or_beyond_be = new_sl_f <= entry
+        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
+        locked_r = ((entry - new_sl_f) / r_dist) if r_dist > 0 else 0.0
+    else:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = "Chặn TRAIL: side không hợp lệ"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
+    if upnl <= 0:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn TRAIL: chưa lãi (uPnL={upnl:+.4f})"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+    if not tighter:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn TRAIL: SL mới không chặt hơn (old={old_sl} new={new_sl_f})"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+    if not at_or_beyond_be:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn TRAIL: SL mới chưa về/khóa BE (entry={entry} new={new_sl_f})"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+    # Prefer lock ≥ TRAIL_MIN_LOCK_R; still allow pure breakeven (locked_r >= 0)
+    if locked_r < 0:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = f"Chặn TRAIL: locked_r={locked_r:.2f} < 0"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
+    decision["manage_action"] = "TRAIL"
+    decision["action"] = "MANAGE_TRAIL"
+    decision["new_stop_loss"] = new_sl_f
+    decision["locked_r"] = round(locked_r, 3)
+    return decision, None
+
+
 def handle_closed_position(
     binance: BinanceClient,
     memory: MemoryManager,
@@ -341,26 +470,98 @@ def job_trade(
         if paper.has_exposure():
             pos = paper.get_open_position()
             pending = paper.summary().get("pending")
-            if pos:
-                entry = float(pos["entry"])
-                qty = float(pos["quantity"])
-                if pos["action"] == "BUY":
-                    upnl = qty * (price - entry)
-                else:
-                    upnl = qty * (entry - price)
-                notifier.send(
-                    f"PAPER ĐANG MỞ {pos['action']} @ {entry}\n"
-                    f"Giá mark={price:.2f} | lãi/lỗ tạm={upnl:+.4f}u\n"
-                    f"SL={pos['stop_loss']} | TP={pos['take_profit']}\n"
-                    f"{_paper_status_text(paper)}\n"
-                    "— bỏ qua lệnh mới"
+            if not config.PAPER_MANAGE_ENABLED:
+                if pos:
+                    entry = float(pos["entry"])
+                    qty = float(pos["quantity"])
+                    if pos["action"] == "BUY":
+                        upnl = qty * (price - entry)
+                    else:
+                        upnl = qty * (entry - price)
+                    notifier.send(
+                        f"PAPER ĐANG MỞ {pos['action']} @ {entry}\n"
+                        f"Giá mark={price:.2f} | lãi/lỗ tạm={upnl:+.4f}u\n"
+                        f"SL={pos['stop_loss']} | TP={pos['take_profit']}\n"
+                        f"{_paper_status_text(paper)}\n"
+                        "— bỏ qua lệnh mới (manage tắt)"
+                    )
+                elif pending:
+                    notifier.send(
+                        f"PAPER CHỜ KHỚP {pending['action']} entry={pending['entry']}\n"
+                        f"Giá mark={price:.2f}\n{_paper_status_text(paper)}\n"
+                        "— bỏ qua lệnh mới (manage tắt)"
+                    )
+                return
+
+            manage = llm.get_manage_decision(
+                candles_4h=candles_4h,
+                candles_1h=candles_1h,
+                candles_1d=candles_1d,
+                current_price=price,
+                position=pos,
+                pending=pending if not pos else None,
+                manage_min_score=config.MANAGE_MIN_SCORE,
+            )
+            manage, reject = validate_manage_hard(
+                manage,
+                position=pos,
+                pending=pending if not pos else None,
+                mark=price,
+            )
+            extra = (
+                f"manage_score≥{config.MANAGE_MIN_SCORE} | "
+                f"primary={manage.get('primary_bias')} | "
+                f"{_paper_status_text(paper)}"
+            )
+            if reject:
+                extra += f" | bị chặn: {reject}"
+            state["last_manage"] = manage
+            _save_state(state)
+            try:
+                sum_fn = (
+                    None
+                    if manage.get("llm_error") == "rate_limit"
+                    else llm.summarize_decision_for_history
                 )
-            elif pending:
-                notifier.send(
-                    f"PAPER CHỜ KHỚP {pending['action']} entry={pending['entry']}\n"
-                    f"Giá mark={price:.2f}\n{_paper_status_text(paper)}\n"
-                    "— bỏ qua lệnh mới"
-                )
+                decision_history.append(manage, price, summarize_fn=sum_fn)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("decision_history manage append failed: %s", exc)
+            notifier.notify_manage(manage, mark=price, extra=extra)
+
+            action = str(manage.get("manage_action") or "HOLD").upper()
+            if action == "CLOSE" and pos:
+                closed = paper.close_now(price, reason="MANAGE_CLOSE")
+                if closed.get("ok"):
+                    try:
+                        handle_paper_closed(memory, llm, notifier, closed, binance)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("manage close post-mortem failed")
+                        notifier.notify_error("paper_manage_close", str(exc))
+            elif action == "CANCEL_PENDING" and pending and not pos:
+                cancelled = paper.cancel_pending()
+                if cancelled.get("ok"):
+                    notifier.send(
+                        "PAPER — HỦY LỆNH CHỜ (manage)\n"
+                        f"{cancelled.get('pending', {}).get('action')} "
+                        f"entry={cancelled.get('pending', {}).get('entry')}\n"
+                        f"{_paper_status_text(paper)}"
+                    )
+            elif action == "TRAIL" and pos:
+                new_sl = float(manage["new_stop_loss"])
+                trailed = paper.update_stop_loss(new_sl)
+                if trailed.get("ok"):
+                    notifier.send(
+                        "PAPER — TRAIL SL\n"
+                        f"{pos.get('action')} SL {trailed.get('old_sl')} → "
+                        f"{trailed.get('new_sl')} (locked_r="
+                        f"{manage.get('locked_r', '?')})\n"
+                        f"{_paper_status_text(paper)}"
+                    )
+            logger.info(
+                "=== Paper manage done action=%s thesis=%s ===",
+                action,
+                manage.get("thesis_status"),
+            )
             return
 
         balance = paper.balance()
@@ -425,6 +626,8 @@ def job_trade(
                 mark_price=price,
                 signal_level=decision.get("signal_level"),
                 win_probability=decision.get("win_probability"),
+                trigger=str(decision.get("trigger") or ""),
+                invalidation=str(decision.get("invalidation") or ""),
             )
             if not placed.get("ok"):
                 notifier.send(f"PAPER từ chối: {placed.get('reason')}")
