@@ -71,6 +71,16 @@ PAPER_MODE = (
 PAPER_BALANCE_USDT = float(os.getenv("PAPER_BALANCE_USDT", "1000"))
 # Margin USDT mỗi lệnh paper (notional = margin * LEVERAGE)
 PAPER_MARGIN_PER_TRADE = float(os.getenv("PAPER_MARGIN_PER_TRADE", "100"))
+# Paper manage mode: LLM re-evaluates open/pending each cycle
+PAPER_MANAGE_ENABLED = os.getenv("PAPER_MANAGE_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+MANAGE_MIN_SCORE = float(os.getenv("MANAGE_MIN_SCORE", "6.0"))
+# TRAIL must lock at least this many R beyond entry (R = |entry - initial_sl|)
+TRAIL_MIN_LOCK_R = float(os.getenv("TRAIL_MIN_LOCK_R", "0.3"))
 # Windows/corporate proxy đôi khi lỗi SSL tới Binance — paper có thể tắt verify
 BINANCE_SSL_VERIFY = os.getenv("BINANCE_SSL_VERIFY", "true").strip().lower() not in {
     "0",
