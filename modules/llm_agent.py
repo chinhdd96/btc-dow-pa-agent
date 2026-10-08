@@ -111,6 +111,67 @@ FORMAT:
 }}
 """
 
+LLM_MANAGE_PROMPT = """Bạn là Senior Crypto Quant Trader đang QUẢN LÝ lệnh paper BTCUSDT đã mở / chờ khớp.
+
+MỤC TIÊU:
+Đánh giá thesis còn đúng với dữ liệu mới không.
+Ưu tiên HOLD trừ khi invalidation rõ hoặc edge tới TP mất.
+TRAIL (kéo SL chặt hơn / về dương) chỉ khi đã có lãi và muốn khóa lời.
+CẤM nới SL (đẩy SL xa hơn theo hướng lỗ).
+
+DỮ LIỆU:
+
+CẤU TRÚC:
+1W: {structure_1w}
+1D: {structure_1d}
+4H: {structure_4h}
+1H: {structure_1h}
+alignment: {structure_align}
+
+CỜ SỐ LIỆU:
+---
+{trade_flags}
+---
+
+ZOOM:
+{zoom_block}
+
+GIÁ MARK: {current_price}
+
+TRẠNG THÁI LỆNH:
+{position_block}
+
+THESIS GỐC:
+trigger={entry_trigger}
+invalidation={entry_invalidation}
+reasoning={entry_reasoning}
+
+HÀNH ĐỘNG CHO PHÉP: {allowed_actions}
+Ngưỡng manage_score tham chiếu: {manage_min_score}
+
+QUY TẮC:
+1. thesis_status: INTACT | WEAKENING | INVALIDATED
+2. manage_action:
+   - HOLD: thesis còn ổn hoặc chưa đủ chắc để cắt
+   - CLOSE: chỉ khi đang có position và thesis INVALIDATED/WEAKENING rõ
+   - CANCEL_PENDING: chỉ khi đang pending và setup chết trước khi khớp
+   - TRAIL: chỉ khi đang position, đã lãi, new_stop_loss chặt hơn SL cũ (BUY: cao hơn; SELL: thấp hơn), ưu tiên breakeven hoặc khóa lời
+3. manage_score 0–10. CLOSE/CANCEL/TRAIL cần score cao.
+4. new_stop_loss chỉ điền khi TRAIL; ngược lại null.
+5. Không đổi TP. Không mở lệnh mới.
+
+OUTPUT: 1 JSON, không markdown. Text tiếng Việt.
+
+FORMAT:
+{{
+  "manage_action": "HOLD",
+  "thesis_status": "INTACT",
+  "manage_score": 5.0,
+  "new_stop_loss": null,
+  "reasoning": "Lý do giữ/cắt/trail"
+}}
+"""
+
 POST_MORTEM_PROMPT = """Bạn là AI Risk Officer phụ trách phân tích hậu phẫu (Post-Mortem) lệnh giao dịch vừa đóng.
 
 THÔNG TIN LỆNH VỪA ĐÓNG:
@@ -155,6 +216,15 @@ HOLD_DECISION: dict[str, Any] = {
     "take_profit_price": None,
     "risk_reward_ratio": None,
     "reasoning": "HOLD do lỗi LLM/parse/validation",
+}
+
+HOLD_MANAGE: dict[str, Any] = {
+    "manage_action": "HOLD",
+    "thesis_status": "INTACT",
+    "manage_score": 0.0,
+    "new_stop_loss": None,
+    "reasoning": "HOLD do lỗi LLM/parse/validation",
+    "action": "HOLD",
 }
 
 
@@ -366,6 +436,120 @@ def _zoom_block(
             ]
         )
     return "\n".join(parts)
+
+
+def _build_manage_prompt(
+    *,
+    candles_1d: list[dict[str, Any]],
+    candles_4h: list[dict[str, Any]],
+    candles_1h: list[dict[str, Any]],
+    current_price: float,
+    position: dict[str, Any] | None,
+    pending: dict[str, Any] | None,
+    manage_min_score: float,
+) -> tuple[str, dict[str, Any]]:
+    """Build compact manage prompt (no core playbook / history)."""
+    from modules.market_structure import build_multi_tf_structure
+
+    struct_1w, struct_1d, struct_4h, struct_1h, meta = build_multi_tf_structure(
+        candles_1d, candles_4h, candles_1h
+    )
+    near_s = meta.get("nearest_support")
+    near_r = meta.get("nearest_resistance")
+    align = (
+        f"history_source={meta.get('history_source')} | "
+        f"primary={meta.get('primary_bias')} | "
+        f"1W={meta.get('bias_1w')} 1D={meta.get('bias_1d')} "
+        f"4H={meta.get('bias_4h')} 1H={meta.get('bias_1h')} | "
+        f"aligned_htf={meta.get('aligned_htf')} | "
+        f"key_S={meta.get('key_supports')} key_R={meta.get('key_resistances')}"
+    )
+    trade_flags_txt = str(meta.get("trade_flags_text") or "(không có trade_flags)")
+    bars_1h = min(config.CANDLE_PROMPT_BARS_1H, 24)
+
+    snap = position or pending or {}
+    if position:
+        entry = float(position.get("fill_price") or position.get("entry") or 0)
+        qty = float(position.get("quantity") or 0)
+        action = str(position.get("action") or "").upper()
+        if action == "BUY":
+            upnl = qty * (current_price - entry)
+        else:
+            upnl = qty * (entry - current_price)
+        initial_sl = float(
+            position.get("initial_stop_loss") or position.get("stop_loss") or 0
+        )
+        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
+        position_block = (
+            f"TYPE=POSITION | action={action} | entry={entry} | mark={current_price}\n"
+            f"SL={position.get('stop_loss')} | initial_SL={initial_sl} | "
+            f"TP={position.get('take_profit')} | qty={qty}\n"
+            f"uPnL={upnl:+.4f}u | R={r_dist:.2f} | filled_at={position.get('filled_at')}"
+        )
+        allowed = "HOLD, CLOSE, TRAIL"
+        thesis = position
+    else:
+        pending = pending or {}
+        position_block = (
+            f"TYPE=PENDING | action={pending.get('action')} | "
+            f"entry={pending.get('entry')} | mark={current_price}\n"
+            f"SL={pending.get('stop_loss')} | TP={pending.get('take_profit')} | "
+            f"created_at={pending.get('created_at')}"
+        )
+        allowed = "HOLD, CANCEL_PENDING"
+        thesis = pending
+
+    prompt = LLM_MANAGE_PROMPT.format(
+        structure_1w=struct_1w,
+        structure_1d=struct_1d,
+        structure_4h=struct_4h,
+        structure_1h=struct_1h,
+        structure_align=align,
+        trade_flags=trade_flags_txt,
+        zoom_block=_zoom_block(
+            candles_4h,
+            candles_1h,
+            n4=12,
+            n1=bars_1h,
+            near_s=near_s,
+            near_r=near_r,
+            with_volume=False,
+        ),
+        current_price=current_price,
+        position_block=position_block,
+        entry_trigger=str(thesis.get("trigger") or ""),
+        entry_invalidation=str(thesis.get("invalidation") or ""),
+        entry_reasoning=str(thesis.get("reasoning") or "")[:500],
+        allowed_actions=allowed,
+        manage_min_score=manage_min_score,
+    )
+    max_prompt = config.LLM_MAX_PROMPT_CHARS
+    if len(prompt) > max_prompt:
+        prompt = LLM_MANAGE_PROMPT.format(
+            structure_1w=struct_1w,
+            structure_1d=struct_1d,
+            structure_4h=struct_4h,
+            structure_1h=struct_1h,
+            structure_align=align,
+            trade_flags=trade_flags_txt,
+            zoom_block=_zoom_block(
+                candles_4h,
+                candles_1h,
+                n4=0,
+                n1=16,
+                near_s=near_s,
+                near_r=near_r,
+                with_volume=False,
+            ),
+            current_price=current_price,
+            position_block=position_block,
+            entry_trigger=str(thesis.get("trigger") or "")[:200],
+            entry_invalidation=str(thesis.get("invalidation") or "")[:200],
+            entry_reasoning=str(thesis.get("reasoning") or "")[:240],
+            allowed_actions=allowed,
+            manage_min_score=manage_min_score,
+        )
+    return prompt, meta
 
 
 def _build_decision_prompt(
@@ -848,6 +1032,105 @@ class LLMAgent:
         }
 
         return out
+
+    def get_manage_decision(
+        self,
+        candles_4h: list[dict[str, Any]],
+        candles_1h: list[dict[str, Any]],
+        current_price: float,
+        *,
+        position: dict[str, Any] | None = None,
+        pending: dict[str, Any] | None = None,
+        candles_1d: list[dict[str, Any]] | None = None,
+        manage_min_score: float | None = None,
+    ) -> dict[str, Any]:
+        """LLM manage-mode for open paper position / pending."""
+        candles_1d = candles_1d or []
+        min_score = (
+            float(manage_min_score)
+            if manage_min_score is not None
+            else float(config.MANAGE_MIN_SCORE)
+        )
+        prompt, struct_meta = _build_manage_prompt(
+            candles_1d=candles_1d,
+            candles_4h=candles_4h,
+            candles_1h=candles_1h,
+            current_price=current_price,
+            position=position,
+            pending=pending,
+            manage_min_score=min_score,
+        )
+        logger.info(
+            "Manage prompt chars=%d primary=%s exposure=%s",
+            len(prompt),
+            struct_meta.get("primary_bias"),
+            "position" if position else "pending",
+        )
+        system = (
+            "Bạn đang QUẢN LÝ lệnh paper đã mở/chờ. Trả về 1 JSON hợp lệ, không markdown. "
+            "Ưu tiên HOLD trừ invalidation rõ hoặc edge tới TP mất. "
+            "TRAIL chỉ kéo SL chặt hơn / về dương khi đã lãi — CẤM nới SL. "
+            "Không mở lệnh mới, không đổi TP. Text tiếng Việt."
+        )
+        try:
+            raw = self._chat(system=system, user=prompt, temperature=0.1)
+            try:
+                data = extract_json_object(raw)
+            except ValueError:
+                repair = (
+                    f"Giá={current_price}. Chỉ trả về 1 JSON keys: "
+                    "manage_action, thesis_status, manage_score, new_stop_loss, reasoning. "
+                    "manage_action ∈ HOLD|CLOSE|CANCEL_PENDING|TRAIL. "
+                    "thesis_status ∈ INTACT|WEAKENING|INVALIDATED. Text tiếng Việt."
+                )
+                raw2 = self._chat(system=system, user=repair, temperature=0)
+                data = extract_json_object(raw2)
+        except Exception as exc:  # noqa: BLE001
+            if _is_rate_limit_error(exc):
+                logger.warning("get_manage_decision rate-limited: %s", exc)
+            else:
+                logger.exception("get_manage_decision failed: %s", exc)
+            hold = dict(HOLD_MANAGE)
+            hold["reasoning"] = _friendly_llm_error(exc)
+            hold["llm_error"] = "rate_limit" if _is_rate_limit_error(exc) else "error"
+            hold["primary_bias"] = struct_meta.get("primary_bias")
+            return hold
+
+        out = self._normalize_manage(data)
+        out["primary_bias"] = struct_meta.get("primary_bias")
+        out["structure_meta"] = {
+            "bars_1d": struct_meta.get("bars_1d"),
+            "bars_4h": struct_meta.get("bars_4h"),
+            "bars_1h": struct_meta.get("bars_1h"),
+        }
+        return out
+
+    def _normalize_manage(self, decision: dict[str, Any]) -> dict[str, Any]:
+        action = str(
+            decision.get("manage_action") or decision.get("action") or "HOLD"
+        ).upper()
+        if action not in {"HOLD", "CLOSE", "CANCEL_PENDING", "TRAIL"}:
+            action = "HOLD"
+        thesis = str(decision.get("thesis_status") or "INTACT").upper()
+        if thesis not in {"INTACT", "WEAKENING", "INVALIDATED"}:
+            thesis = "INTACT"
+        score = _normalize_setup_score(decision.get("manage_score", 0))
+        new_sl = _to_float(decision.get("new_stop_loss"))
+        if action != "TRAIL":
+            new_sl = None
+        return {
+            "manage_action": action,
+            "thesis_status": thesis,
+            "manage_score": score,
+            "new_stop_loss": new_sl,
+            "reasoning": str(decision.get("reasoning") or ""),
+            # Compatibility with decision_history / notifier that expect action
+            "action": f"MANAGE_{action}",
+            "setup_score": score,
+            "market_regime": "REGIME_MANAGE",
+            "state": thesis,
+            "signal_level": 0,
+        }
 
     def run_post_mortem(
         self,
