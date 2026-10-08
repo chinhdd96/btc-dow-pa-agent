@@ -50,6 +50,11 @@ def _regime_vi(regime: Any) -> str:
     return REGIME_VI.get(key, key or "—")
 
 
+def _clip(value: Any, n: int) -> str:
+    """Safe truncate — decision fields may be None even when key exists."""
+    return str(value or "")[:n]
+
+
 class Notifier:
     def __init__(
         self,
@@ -114,21 +119,22 @@ class Notifier:
         lines = [
             "BTC Dow/PA — Quyết định giao dịch",
             f"Chế độ: {_regime_vi(decision.get('market_regime'))} | "
-            f"State: {decision.get('state', '')} | Bias: {decision.get('short_term_bias', '')}",
+            f"State: {_clip(decision.get('state'), 80)} | "
+            f"Bias: {_clip(decision.get('short_term_bias'), 40)}",
             f"Level L{decision.get('signal_level', '?')} | "
             f"Điểm: {decision.get('setup_score')} | "
             f"P(win): {decision.get('win_probability')} | Hành động: {action}",
-            f"Trigger: {str(decision.get('trigger', ''))[:200]}",
-            f"Invalidation: {str(decision.get('invalidation', ''))[:200]}",
+            f"Trigger: {_clip(decision.get('trigger'), 200)}",
+            f"Invalidation: {_clip(decision.get('invalidation'), 200)}",
             (
                 f"Vào lệnh: {decision.get('entry_price')} | "
                 f"Cắt lỗ (SL): {decision.get('stop_loss_price')} | "
                 f"Chốt lời (TP): {decision.get('take_profit_price')}"
             ),
             f"Tỷ lệ R:R: {decision.get('risk_reward_ratio')}",
-            f"Phân tích Dow: {decision.get('dow_structure_analysis', '')[:400]}",
-            f"Tín hiệu Price Action: {decision.get('price_action_signal', '')[:400]}",
-            f"Lý do: {decision.get('reasoning', '')[:500]}",
+            f"Phân tích Dow: {_clip(decision.get('dow_structure_analysis'), 400)}",
+            f"Tín hiệu Price Action: {_clip(decision.get('price_action_signal'), 400)}",
+            f"Lý do: {_clip(decision.get('reasoning'), 500)}",
         ]
         if balance is not None:
             lines.append(f"Số dư (USDT): {balance:.4f}")
