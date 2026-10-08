@@ -82,6 +82,28 @@ class Notifier:
             logger.exception("Telegram send failed: %s", exc)
             return False
 
+    def notify_manage(
+        self,
+        decision: dict[str, Any],
+        mark: float | None = None,
+        extra: str = "",
+    ) -> None:
+        action = str(decision.get("manage_action") or decision.get("action") or "HOLD")
+        lines = [
+            "BTC Dow/PA — Quản trị lệnh (paper)",
+            f"Hành động: {action} | Thesis: {decision.get('thesis_status')} | "
+            f"Điểm: {decision.get('manage_score')}",
+        ]
+        if mark is not None:
+            lines.append(f"Giá mark: {mark:.2f}")
+        new_sl = decision.get("new_stop_loss")
+        if new_sl is not None:
+            lines.append(f"SL mới (TRAIL): {new_sl}")
+        lines.append(f"Lý do: {str(decision.get('reasoning') or '')[:500]}")
+        if extra:
+            lines.append(extra)
+        self.send("\n".join(lines))
+
     def notify_decision(
         self,
         decision: dict[str, Any],
