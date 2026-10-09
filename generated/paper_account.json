@@ -4,7 +4,25 @@
   "balance": 999.402593064149,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "BUY",
+    "entry": 82850.0,
+    "stop_loss": 82330.0,
+    "initial_stop_loss": 82330.0,
+    "take_profit": 84700.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.003621001810500905,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Trong môi trường side‑way, low‑sweep đã thất bại cho thấy lực mua đang chiếm ưu thế tại mức hỗ trợ 82500. Giá đã đóng lại trên mức này, EMA20/25 trên khung 1H đang nằm dưới giá, hỗ trợ bias bullish ngắn hạn. Với R:R ≈3.5 và win probability ~65%, lệnh BUY ở mức 82850, SL 82330 và TP 84700 mang lại kỳ vọng dương mà không vi phạm các quy tắc rủi ro.",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.65,
+    "trigger": "Low sweep back: giá đã phá mức hỗ trợ 82500 rồi đóng lại phía trên, tạo tín hiệu thất bại breakout",
+    "invalidation": "Giá phá lại dưới mức hỗ trợ 82500 (hoặc dưới mức swing low gần nhất 82200) trước khi đạt mục tiêu",
+    "created_at": "2026-10-09T15:05:10.178435+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
