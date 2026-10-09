@@ -111,16 +111,19 @@ FORMAT:
 }}
 """
 
-LLM_MANAGE_PROMPT = """Bạn là Senior Crypto Quant Trader đang QUẢN LÝ lệnh paper BTCUSDT đã mở / chờ khớp.
+LLM_MANAGE_PROMPT = """Bạn là Senior Crypto Quant Trader chuyên QUẢN LÝ lệnh paper BTCUSDT đã mở hoặc đang chờ khớp.
 
 MỤC TIÊU:
-Đánh giá thesis còn đúng với dữ liệu mới không.
-Ưu tiên HOLD trừ khi invalidation rõ hoặc edge tới TP mất.
-TRAIL (kéo SL chặt hơn / về dương) chỉ khi đã có lãi và muốn khóa lời.
-CẤM nới SL (đẩy SL xa hơn theo hướng lỗ).
+Bảo vệ vốn, giữ lệnh khi thesis còn hiệu lực, đóng lệnh khi thesis bị vô hiệu hóa rõ ràng, và trailing khi cấu trúc thị trường hỗ trợ khóa lợi nhuận.
+
+ƯU TIÊN:
+1. Không nới SL, không tăng rủi ro tối đa của lệnh.
+2. Không đóng lệnh chỉ vì một vài cây nến ngược chiều thông thường.
+3. Không giữ lệnh mù quáng khi thesis đã bị vô hiệu hóa.
+4. Không trailing chỉ vì PnL vừa chuyển sang dương.
+5. Không mở lệnh mới, không thay đổi TP.
 
 DỮ LIỆU:
-
 CẤU TRÚC:
 1W: {structure_1w}
 1D: {structure_1d}
@@ -149,18 +152,43 @@ reasoning={entry_reasoning}
 HÀNH ĐỘNG CHO PHÉP: {allowed_actions}
 Ngưỡng manage_score tham chiếu: {manage_min_score}
 
-QUY TẮC:
-1. thesis_status: INTACT | WEAKENING | INVALIDATED
-2. manage_action:
-   - HOLD: thesis còn ổn hoặc chưa đủ chắc để cắt
-   - CLOSE: chỉ khi đang có position và thesis INVALIDATED/WEAKENING rõ
-   - CANCEL_PENDING: chỉ khi đang pending và setup chết trước khi khớp
-   - TRAIL: chỉ khi đang position, đã lãi, new_stop_loss chặt hơn SL cũ (BUY: cao hơn; SELL: thấp hơn), ưu tiên breakeven hoặc khóa lời
-3. manage_score 0–10. CLOSE/CANCEL/TRAIL cần score cao.
-4. new_stop_loss chỉ điền khi TRAIL; ngược lại null.
-5. Không đổi TP. Không mở lệnh mới.
+QUY TẮC ĐÁNH GIÁ:
+1. thesis_status:
+- INTACT: thesis còn hiệu lực, chưa có bằng chứng đủ mạnh chống lại.
+- WEAKENING: có bằng chứng chống lại thesis nhưng chưa chạm điều kiện invalidation.
+- INVALIDATED: điều kiện invalidation đã xảy ra hoặc cấu trúc cốt lõi của thesis bị phá vỡ rõ ràng.
 
-OUTPUT: 1 JSON, không markdown. Text tiếng Việt.
+2. manage_action:
+- HOLD: thesis còn hiệu lực hoặc chưa đủ bằng chứng để đóng/trailing.
+- CLOSE: chỉ khi đang có position, thesis INVALIDATED hoặc có bằng chứng mạnh cho thấy edge đã mất. Nêu rõ bằng chứng.
+- CANCEL_PENDING: chỉ khi đang pending và setup không còn hợp lệ trước khi khớp.
+- TRAIL: chỉ khi đang có position, có lãi thực tế và cấu trúc giá hỗ trợ khóa lợi nhuận.
+
+3. Quy tắc TRAIL:
+- SELL: new_stop_loss phải thấp hơn SL hiện tại.
+- BUY: new_stop_loss phải cao hơn SL hiện tại.
+- Không trailing chỉ vì một nến ngược chiều nhỏ hoặc PnL vừa dương.
+- Ưu tiên cấu trúc swing phù hợp, như Lower High cho SELL hoặc Higher Low cho BUY.
+- SL mới không được làm tăng rủi ro tối đa của lệnh.
+- Nếu không có vị thế hoặc không có lãi, không được TRAIL.
+
+4. Quy tắc bằng chứng:
+- Phân biệt nhiễu ngắn hạn với thay đổi cấu trúc.
+- Không tự suy diễn giá đã phá level nếu dữ liệu OHLC không xác nhận.
+- Không tự kết luận SL/TP đã khớp; trạng thái khớp lệnh do Python cung cấp.
+- Nếu dữ liệu thiếu hoặc mâu thuẫn, ưu tiên HOLD và nêu rõ sự không chắc chắn.
+
+5. manage_score: 0–10, biểu thị độ chắc chắn của quyết định quản lý, không phải xác suất thắng.
+CLOSE, CANCEL_PENDING và TRAIL phải có lý do cụ thể. Nếu chưa đủ bằng chứng, chọn HOLD.
+Chỉ chọn hành động nằm trong allowed_actions.
+
+6. new_stop_loss:
+- Chỉ điền số khi manage_action=TRAIL.
+- Các trường hợp khác bắt buộc null.
+- Không đổi TP, không mở lệnh mới.
+
+OUTPUT: Một JSON object hợp lệ, không markdown, không thêm văn bản bên ngoài JSON.
+Text tiếng Việt.
 
 FORMAT:
 {{
@@ -168,33 +196,63 @@ FORMAT:
   "thesis_status": "INTACT",
   "manage_score": 5.0,
   "new_stop_loss": null,
-  "reasoning": "Lý do giữ/cắt/trail"
+  "reasoning": "Nêu trạng thái thesis, bằng chứng mới và lý do chọn hành động."
 }}
 """
 
-POST_MORTEM_PROMPT = """Bạn là AI Risk Officer phụ trách phân tích hậu phẫu (Post-Mortem) lệnh giao dịch vừa đóng.
+POST_MORTEM_PROMPT = """Bạn là AI Risk Officer phụ trách phân tích hậu giao dịch BTCUSDT.
 
-THÔNG TIN LỆNH VỪA ĐÓNG:
-- Cặp tiền: BTCUSDT | Hành động: {action}
-- Giá Entry: {entry} | Giá SL: {sl} | Giá TP: {tp}
-- Kết quả: {result} (WIN / LOSS) | PnL: {pnl} USDT
-- Market Regime lúc vào lệnh: {regime}
-- Lý do vào lệnh ban đầu: {entry_reasoning}
-- Diễn biến các cây nến sau khi vào lệnh: {post_trade_candles}
+THÔNG TIN LỆNH:
+- Cặp tiền: BTCUSDT
+- Hành động: {action}
+- Entry: {entry}
+- SL: {sl}
+- TP: {tp}
+- Kết quả: {result} (WIN / LOSS)
+- PnL: {pnl} USDT
+- Market regime: {regime}
+- Lý do vào lệnh: {entry_reasoning}
+- Diễn biến nến sau khi vào lệnh: {post_trade_candles}
 
 NHIỆM VỤ:
-1. Xác định nguyên nhân cốt lõi khiến lệnh WIN hoặc LOSS (Do đánh đúng Dow? Do nến PA giả? Do tin tức giật?).
-2. Rút ra 01 BÀI HỌC HÀNH ĐỘNG (Actionable Rule) cực kỳ ngắn gọn, sắc bén để ngăn lặp lại lỗi sai hoặc phát huy lệnh thắng.
+1. Phân tích nguyên nhân kết quả dựa trên dữ liệu được cung cấp.
+2. Đánh giá riêng:
+   - Chất lượng setup và trigger ban đầu.
+   - Vị trí entry, SL và TP.
+   - Diễn biến sau entry và điều kiện đóng lệnh.
+   - Lỗi quy trình nếu có.
+3. Phân loại kết luận:
+   - PROCESS_ERROR: có lỗi rõ ràng trong quyết định hoặc thực thi.
+   - VALID_LOSS: setup hợp lệ nhưng kết quả thua.
+   - VALID_WIN: setup hợp lệ và kết quả thắng.
+   - INSUFFICIENT_EVIDENCE: thiếu dữ liệu để kết luận.
+4. Rút ra tối đa 01 actionable_rule ngắn gọn.
+5. Không được suy ra một quy tắc phổ quát chỉ từ một lệnh thắng/thua.
+6. Nếu bài học mới chỉ là giả thuyết, ghi rõ cần kiểm chứng thêm; không biến nó thành quy tắc bắt buộc ngay.
+7. Không bịa dữ liệu, xác suất thắng hoặc nguyên nhân như tin tức nếu đầu vào không có bằng chứng.
+8. Weight là mức ưu tiên tham khảo từ 1–3:
+   - 1: giả thuyết từ một lệnh, cần kiểm chứng.
+   - 2: bài học có bằng chứng tương đối rõ nhưng cần thêm mẫu.
+   - 3: lỗi quy trình rõ ràng hoặc quy tắc đã được kiểm chứng độc lập.
+   Không tự nâng weight chỉ vì lệnh có PnL lớn.
 
-TRẢ VỀ KẾT QUẢ DƯỚI DẠNG JSON NGUYÊN BẢN.
-mistake_or_insight và actionable_rule BẮT BUỘC viết bằng TIẾNG VIỆT:
+mistake_or_insight và actionable_rule bắt buộc bằng TIẾNG VIỆT.
+
+OUTPUT: Một JSON object hợp lệ, không markdown.
+
+FORMAT:
 {{
   "regime": "{regime}",
-  "mistake_or_insight": "Nguyên nhân thắng/thua 1-2 câu tiếng Việt",
-  "actionable_rule": "CẤM... hoặc CHỈ VÀO LỆNH KHI... (tiếng Việt)",
+  "classification": "INSUFFICIENT_EVIDENCE",
+  "mistake_or_insight": "Phân tích nguyên nhân dựa trên bằng chứng thực tế.",
+  "actionable_rule": "Giả thuyết cần kiểm chứng hoặc quy tắc được hỗ trợ bởi dữ liệu.",
   "weight": 1
 }}
 """
+
+_POST_MORTEM_CLASSIFICATIONS = frozenset(
+    {"PROCESS_ERROR", "VALID_LOSS", "VALID_WIN", "INSUFFICIENT_EVIDENCE"}
+)
 
 HOLD_DECISION: dict[str, Any] = {
     "structure": "RANGE",
@@ -1070,9 +1128,10 @@ class LLMAgent:
         )
         system = (
             "Bạn đang QUẢN LÝ lệnh paper đã mở/chờ. Trả về 1 JSON hợp lệ, không markdown. "
-            "Ưu tiên HOLD trừ invalidation rõ hoặc edge tới TP mất. "
-            "TRAIL chỉ kéo SL chặt hơn / về dương khi đã lãi — CẤM nới SL. "
-            "Không mở lệnh mới, không đổi TP. Text tiếng Việt."
+            "Bảo vệ vốn: HOLD khi thiếu bằng chứng; CLOSE khi thesis INVALIDATED/edge mất; "
+            "TRAIL chỉ khi lãi + cấu trúc hỗ trợ khóa lời — CẤM nới SL. "
+            "Không mở lệnh mới, không đổi TP. Không suy diễn phá level nếu OHLC không xác nhận. "
+            "Text tiếng Việt."
         )
         try:
             raw = self._chat(system=system, user=prompt, temperature=0.1)
@@ -1166,26 +1225,58 @@ class LLMAgent:
             raw = self._chat(
                 system=(
                     "Bạn là Risk Officer. Chỉ trả về 1 JSON. "
-                    "mistake_or_insight và actionable_rule viết TIẾNG VIỆT."
+                    "Có classification ∈ PROCESS_ERROR|VALID_LOSS|VALID_WIN|"
+                    "INSUFFICIENT_EVIDENCE. weight 1–3. "
+                    "mistake_or_insight và actionable_rule viết TIẾNG VIỆT. "
+                    "Không bịa tin tức/nguyên nhân ngoài dữ liệu."
                 ),
                 user=prompt,
                 temperature=0.3,
             )
             data = extract_json_object(raw)
-            return {
-                "regime": data.get("regime") or regime,
-                "mistake_or_insight": data.get("mistake_or_insight", ""),
-                "actionable_rule": data.get("actionable_rule", ""),
-                "weight": int(data.get("weight", 1) or 1),
-            }
+            return self._normalize_post_mortem(data, regime=regime)
         except Exception as exc:  # noqa: BLE001
             logger.exception("post_mortem failed: %s", exc)
             return {
                 "regime": regime,
+                "classification": "INSUFFICIENT_EVIDENCE",
                 "mistake_or_insight": f"Hậu phẫu LLM lỗi: {exc}",
-                "actionable_rule": "Xem lại thủ công; giữ nguyên quy tắc rủi ro nghiêm ngặt.",
+                "actionable_rule": (
+                    "Giả thuyết cần kiểm chứng: xem lại thủ công; "
+                    "giữ nguyên quy tắc rủi ro."
+                ),
                 "weight": 1,
             }
+
+    def _normalize_post_mortem(
+        self,
+        data: dict[str, Any],
+        *,
+        regime: str,
+    ) -> dict[str, Any]:
+        classification = str(data.get("classification") or "").upper().strip()
+        if classification not in _POST_MORTEM_CLASSIFICATIONS:
+            # Infer soft default from wording if model omitted field
+            blob = (
+                f"{data.get('mistake_or_insight', '')} "
+                f"{data.get('actionable_rule', '')}"
+            ).upper()
+            if "PROCESS" in blob or "LỖI QUY TRÌNH" in blob:
+                classification = "PROCESS_ERROR"
+            else:
+                classification = "INSUFFICIENT_EVIDENCE"
+        try:
+            weight = int(data.get("weight", 1) or 1)
+        except (TypeError, ValueError):
+            weight = 1
+        weight = max(1, min(3, weight))
+        return {
+            "regime": data.get("regime") or regime,
+            "classification": classification,
+            "mistake_or_insight": str(data.get("mistake_or_insight") or ""),
+            "actionable_rule": str(data.get("actionable_rule") or ""),
+            "weight": weight,
+        }
 
 
 def _to_float(value: Any) -> float | None:
