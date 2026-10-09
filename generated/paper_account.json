@@ -4,7 +4,25 @@
   "balance": 1002.0101911728332,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "SELL",
+    "entry": 82255.0,
+    "stop_loss": 82350.0,
+    "initial_stop_loss": 82350.0,
+    "take_profit": 80900.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.00364719469941037,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Mô hình failed breakout trên kháng cự kết hợp với bias giảm trên 1H cho thấy khả năng giá sẽ quay lại phía dưới. R:R > 1.2, setup_score > 5, win_probability > 0.6 → có edge đủ để vào lệnh bán. Nếu giá tái chiếm kháng cự, lệnh sẽ bị hủy (invalidation).",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.65,
+    "trigger": "Breakout thất bại trên kháng cự R≈82282.8, nến cao chạm 82299.6 rồi đóng lại dưới mức kháng cự, kèm sweep high back",
+    "invalidation": "Giá tái chiếm và đóng trên mức kháng cự R",
+    "created_at": "2026-10-09T02:53:21.497178+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
