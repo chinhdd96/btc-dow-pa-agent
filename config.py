@@ -39,8 +39,8 @@ MAX_LESSONS_PER_REGIME = 5
 # Legacy interval (unused when clock-aligned schedule is on). Keep for env compat.
 DECISION_INTERVAL_MINUTES = int(os.getenv("DECISION_INTERVAL_MINUTES", "60"))
 # Run trade job every hour at HH:MM — after H1 close at :00.
-# Sweet spot ổn định API: 2–5. Default 15 = an toàn cao, trễ ~15 phút.
-DECISION_AT_MINUTE = max(0, min(59, int(os.getenv("DECISION_AT_MINUTE", "15"))))
+# Sweet spot ổn định API: 2–5 phút sau đóng H1 (:00).
+DECISION_AT_MINUTE = max(0, min(59, int(os.getenv("DECISION_AT_MINUTE", "5"))))
 # Short-term decision history injected into the next prompt
 DECISION_HISTORY_MAX = int(os.getenv("DECISION_HISTORY_MAX", "20"))
 DECISION_SUMMARY_MAX_CHARS = int(os.getenv("DECISION_SUMMARY_MAX_CHARS", "200"))
