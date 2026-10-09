@@ -165,8 +165,9 @@ QUY TẮC ĐÁNH GIÁ:
 - TRAIL: chỉ khi đang có position, có lãi thực tế và cấu trúc giá hỗ trợ khóa lợi nhuận.
 
 3. Quy tắc TRAIL:
-- SELL: new_stop_loss phải thấp hơn SL hiện tại.
-- BUY: new_stop_loss phải cao hơn SL hiện tại.
+- SELL: new_stop_loss phải thấp hơn SL hiện tại, vẫn CAO HƠN giá mark hiện tại.
+- BUY: new_stop_loss phải cao hơn SL hiện tại, vẫn THẤP HƠN giá mark hiện tại.
+- Không đặt SL đã bị giá vượt (sẽ đóng lệnh ngay lập tức — sai).
 - Không trailing chỉ vì một nến ngược chiều nhỏ hoặc PnL vừa dương.
 - Ưu tiên cấu trúc swing phù hợp, như Lower High cho SELL hoặc Higher Low cho BUY.
 - SL mới không được làm tăng rủi ro tối đa của lệnh.
@@ -208,11 +209,15 @@ THÔNG TIN LỆNH:
 - Entry: {entry}
 - SL: {sl}
 - TP: {tp}
+- Exit: {exit_price}
+- Lý do đóng (Python): {close_reason}
 - Kết quả: {result} (WIN / LOSS)
 - PnL: {pnl} USDT
 - Market regime: {regime}
 - Lý do vào lệnh: {entry_reasoning}
 - Diễn biến nến sau khi vào lệnh: {post_trade_candles}
+
+Lưu ý: close_reason là nguồn sự thật (SL/TP/MANAGE_CLOSE…). Không được nói chạm TP nếu close_reason không phải TP.
 
 NHIỆM VỤ:
 1. Phân tích nguyên nhân kết quả dựa trên dữ liệu được cung cấp.
@@ -1204,6 +1209,8 @@ class LLMAgent:
         regime: str,
         entry_reasoning: str,
         post_trade_candles: list[dict[str, Any]] | str,
+        exit_price: float | None = None,
+        close_reason: str = "",
     ) -> dict[str, Any]:
         candles_str = (
             post_trade_candles
@@ -1215,6 +1222,8 @@ class LLMAgent:
             entry=entry,
             sl=sl,
             tp=tp,
+            exit_price=exit_price if exit_price is not None else "?",
+            close_reason=close_reason or "UNKNOWN",
             result=result,
             pnl=pnl,
             regime=regime,
