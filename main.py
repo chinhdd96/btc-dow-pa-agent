@@ -71,6 +71,73 @@ def _load_news_context() -> dict[str, Any]:
         return {}
 
 
+def _parse_iso_ms(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            v = int(value)
+            return v if v > 10_000_000_000 else v * 1000
+        s = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _candles_since_fill(
+    binance: BinanceClient,
+    filled_at: Any,
+    interval: str = "1m",
+    *,
+    max_bars: int = 1500,
+) -> list[dict[str, Any]]:
+    """Nến từ lúc khớp entry → hiện tại (path giá để quét SL/TP / post-mortem)."""
+    start_ms = _parse_iso_ms(filled_at)
+    if not start_ms:
+        return []
+    # Lùi 1 bar để bao nến chứa thời điểm fill
+    interval_ms = {
+        "1m": 60_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "1h": 3_600_000,
+        "4h": 14_400_000,
+        "1d": 86_400_000,
+    }.get(interval, 60_000)
+    start_ms = max(0, start_ms - interval_ms)
+    end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    return binance.get_klines_range(
+        interval,
+        start_time=start_ms,
+        end_time=end_ms,
+        max_bars=max_bars,
+        max_pages=3 if interval == "1m" else 2,
+    )
+
+
+def _post_mortem_candles(
+    binance: BinanceClient,
+    filled_at: Any,
+) -> list[dict[str, Any]]:
+    """1H từ lúc khớp entry (fallback 20 nến gần nhất nếu thiếu filled_at)."""
+    if filled_at:
+        try:
+            bars = _candles_since_fill(
+                binance, filled_at, config.TIMEFRAME_MAIN, max_bars=48
+            )
+            if bars:
+                return bars
+        except BinanceClientError as exc:
+            logger.warning("post-mortem candles since fill failed: %s", exc)
+    try:
+        return binance.get_klines(config.TIMEFRAME_MAIN, limit=20)
+    except BinanceClientError:
+        return []
+
+
 def effective_min_score(memory: MemoryManager) -> float:
     base = memory.get_min_score()
     news = _load_news_context()
@@ -359,10 +426,14 @@ def handle_closed_position(
         pass
 
     result = "WIN" if pnl >= 0 else "LOSS"
-    try:
-        candles = binance.get_klines(config.TIMEFRAME_MAIN, limit=20)
-    except BinanceClientError:
-        candles = []
+    filled_at = (
+        snap.get("filled_at")
+        or snap.get("opened_at")
+        or last.get("filled_at")
+        or last.get("opened_at")
+        or ""
+    )
+    candles = _post_mortem_candles(binance, filled_at)
 
     lesson = llm.run_post_mortem(
         action=action,
@@ -374,6 +445,7 @@ def handle_closed_position(
         regime=regime,
         entry_reasoning=reasoning,
         post_trade_candles=candles,
+        filled_at=str(filled_at or ""),
     )
     memory.add_lesson(
         regime=lesson.get("regime", regime),
@@ -410,10 +482,8 @@ def handle_paper_closed(
     trade = closed_event.get("trade") or {}
     result = closed_event.get("result", "LOSS")
     pnl = float(closed_event.get("pnl", 0))
-    try:
-        candles = binance.get_klines(config.TIMEFRAME_MAIN, limit=20)
-    except BinanceClientError:
-        candles = []
+    filled_at = trade.get("opened_at") or trade.get("filled_at") or ""
+    candles = _post_mortem_candles(binance, filled_at)
     lesson = llm.run_post_mortem(
         action=trade.get("action", ""),
         entry=float(trade.get("entry") or 0),
@@ -430,6 +500,7 @@ def handle_paper_closed(
             else None
         ),
         close_reason=str(closed_event.get("reason") or trade.get("reason") or ""),
+        filled_at=str(filled_at or ""),
     )
     memory.add_lesson(
         regime=lesson.get("regime", trade.get("regime", "REGIME_SIDEWAY_CHOP")),
@@ -475,7 +546,17 @@ def job_trade(
         last = candles_1h[-1] if candles_1h else {}
         high = float(last.get("high", price))
         low = float(last.get("low", price))
-        events = paper.on_price(price, high=high, low=low)
+        # Quét SL/TP theo đường giá 1m từ lúc khớp entry (không chỉ nến 1H cuối)
+        path_1m: list[dict] = []
+        open_pos = paper.get_open_position()
+        if open_pos and open_pos.get("filled_at"):
+            try:
+                path_1m = _candles_since_fill(binance, open_pos.get("filled_at"), "1m")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("path candles since fill failed: %s", exc)
+        events = paper.on_price(
+            price, high=high, low=low, path_candles=path_1m or None
+        )
 
         for ev in events:
             if ev.get("event") == "filled":
