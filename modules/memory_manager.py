@@ -145,17 +145,24 @@ class MemoryManager:
         mistake_or_insight: str,
         actionable_rule: str,
         weight: int = 1,
+        classification: str = "",
     ) -> None:
         data = self._read()
         key = _memory_regime_bucket(regime)
-        data["lessons_by_regime"][key].append(
-            {
-                "regime": key,
-                "mistake_or_insight": mistake_or_insight,
-                "actionable_rule": actionable_rule,
-                "weight": int(weight) if weight else 1,
-            }
-        )
+        try:
+            w = int(weight) if weight else 1
+        except (TypeError, ValueError):
+            w = 1
+        w = max(1, min(3, w))
+        item: dict[str, Any] = {
+            "regime": key,
+            "mistake_or_insight": mistake_or_insight,
+            "actionable_rule": actionable_rule,
+            "weight": w,
+        }
+        if classification:
+            item["classification"] = str(classification)
+        data["lessons_by_regime"][key].append(item)
         self._write(data)
 
     def compact_memory(self) -> str:
