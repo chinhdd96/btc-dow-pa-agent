@@ -300,6 +300,27 @@ def validate_manage_hard(
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
+    # Critical: SL must still be a real stop vs mark — otherwise on_price
+    # instantly "hits" it (e.g. SELL trail to 81900 while mark=82100).
+    if side == "BUY" and new_sl_f >= mark:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = (
+            f"Chặn TRAIL: BUY SL mới {new_sl_f} >= mark {mark:.2f} "
+            "(đã bị giá vượt — đóng ảo)"
+        )
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+    if side == "SELL" and new_sl_f <= mark:
+        decision["manage_action"] = "HOLD"
+        decision["action"] = "MANAGE_HOLD"
+        reason = (
+            f"Chặn TRAIL: SELL SL mới {new_sl_f} <= mark {mark:.2f} "
+            "(đã bị giá vượt — đóng ảo)"
+        )
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
     decision["manage_action"] = "TRAIL"
     decision["action"] = "MANAGE_TRAIL"
     decision["new_stop_loss"] = new_sl_f
@@ -403,6 +424,12 @@ def handle_paper_closed(
         regime=trade.get("regime", "REGIME_SIDEWAY_CHOP"),
         entry_reasoning=trade.get("reasoning", ""),
         post_trade_candles=candles,
+        exit_price=(
+            float(trade["exit"])
+            if trade.get("exit") is not None
+            else None
+        ),
+        close_reason=str(closed_event.get("reason") or trade.get("reason") or ""),
     )
     memory.add_lesson(
         regime=lesson.get("regime", trade.get("regime", "REGIME_SIDEWAY_CHOP")),
@@ -551,7 +578,7 @@ def job_trade(
                     )
             elif action == "TRAIL" and pos:
                 new_sl = float(manage["new_stop_loss"])
-                trailed = paper.update_stop_loss(new_sl)
+                trailed = paper.update_stop_loss(new_sl, mark_price=price)
                 if trailed.get("ok"):
                     notifier.send(
                         "PAPER — TRAIL SL\n"
@@ -559,6 +586,10 @@ def job_trade(
                         f"{trailed.get('new_sl')} (locked_r="
                         f"{manage.get('locked_r', '?')})\n"
                         f"{_paper_status_text(paper)}"
+                    )
+                else:
+                    notifier.send(
+                        f"PAPER — TRAIL từ chối: {trailed.get('reason')}"
                     )
             logger.info(
                 "=== Paper manage done action=%s thesis=%s ===",
