@@ -4,7 +4,25 @@
   "balance": 1001.8521607874919,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "BUY",
+    "entry": 83280.0,
+    "stop_loss": 82600.0,
+    "initial_stop_loss": 82600.0,
+    "take_profit": 84500.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.0036023054755043226,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Trong môi trường side‑way, một low‑sweep đã thất bại (price quay lại trên support) kết hợp với bullish inside bar tạo tín hiệu mua ở biên dưới. SL đặt dưới mức low sweep với buffer ATR (~423) để tránh bị chạm ngắn hạn, TP hướng tới kháng cự gần nhất, R:R > 1.5, nên có edge tích cực.",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.65,
+    "trigger": "Low sweep (price broke below recent local low 81866.6) then closed back inside range, forming a bullish trap",
+    "invalidation": "Re‑break of the swept low (price closing below 81866.6) or failure to hold above the support zone",
+    "created_at": "2026-10-09T12:05:15.018921+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
