@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 1001.8521607874919,
+  "balance": 999.402593064149,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "BUY",
-    "entry": 83280.0,
-    "stop_loss": 82600.0,
-    "initial_stop_loss": 82600.0,
-    "take_profit": 84500.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0036023054755043226,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Trong môi trường side‑way, một low‑sweep đã thất bại (price quay lại trên support) kết hợp với bullish inside bar tạo tín hiệu mua ở biên dưới. SL đặt dưới mức low sweep với buffer ATR (~423) để tránh bị chạm ngắn hạn, TP hướng tới kháng cự gần nhất, R:R > 1.5, nên có edge tích cực.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.65,
-    "trigger": "Low sweep (price broke below recent local low 81866.6) then closed back inside range, forming a bullish trap",
-    "invalidation": "Re‑break of the swept low (price closing below 81866.6) or failure to hold above the support zone",
-    "created_at": "2026-10-09T12:05:15.018921+00:00",
-    "filled_at": "2026-10-09T12:05:16.507915+00:00",
-    "fill_price": 83280.0,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -171,12 +150,30 @@
       "win_probability": 0.62,
       "opened_at": "2026-10-09T04:18:33.991869+00:00",
       "closed_at": "2026-10-09T12:05:02.493480+00:00"
+    },
+    {
+      "action": "BUY",
+      "entry": 83280.0,
+      "exit": 82600.0,
+      "sl": 82600.0,
+      "tp": 84500.0,
+      "quantity": 0.0036023054755043226,
+      "margin": 100.0,
+      "pnl": -2.4496,
+      "result": "LOSS",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Trong môi trường side‑way, một low‑sweep đã thất bại (price quay lại trên support) kết hợp với bullish inside bar tạo tín hiệu mua ở biên dưới. SL đặt dưới mức low sweep với buffer ATR (~423) để tránh bị chạm ngắn hạn, TP hướng tới kháng cự gần nhất, R:R > 1.5, nên có edge tích cực.",
+      "signal_level": 2,
+      "win_probability": 0.65,
+      "opened_at": "2026-10-09T12:05:16.507915+00:00",
+      "closed_at": "2026-10-09T14:05:02.504360+00:00"
     }
   ],
   "stats": {
-    "total_trades": 8,
+    "total_trades": 9,
     "wins": 4,
-    "losses": 4,
-    "realized_pnl": 1.8521607874918349
+    "losses": 5,
+    "realized_pnl": -0.5974069358511045
   }
 }
