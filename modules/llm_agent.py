@@ -214,18 +214,22 @@ THÔNG TIN LỆNH:
 - Kết quả: {result} (WIN / LOSS)
 - PnL: {pnl} USDT
 - Market regime: {regime}
+- Thời điểm khớp entry (UTC): {filled_at}
 - Lý do vào lệnh: {entry_reasoning}
-- Diễn biến nến sau khi vào lệnh: {post_trade_candles}
+- Diễn biến nến TỪ LÚC KHỚP ENTRY → đóng lệnh: {post_trade_candles}
 
-Lưu ý: close_reason là nguồn sự thật (SL/TP/MANAGE_CLOSE…). Không được nói chạm TP nếu close_reason không phải TP.
+Lưu ý:
+- close_reason là nguồn sự thật (SL/TP/MANAGE_CLOSE…). Không được nói chạm TP nếu close_reason không phải TP.
+- Ưu tiên phân tích theo timeline từ filled_at; bỏ qua diễn biến trước khi khớp entry.
+- Nến được cung cấp bắt đầu từ (hoặc gần) thời điểm khớp entry — lấy đó làm mốc gốc.
 
 NHIỆM VỤ:
-1. Phân tích nguyên nhân kết quả dựa trên dữ liệu được cung cấp.
+1. Phân tích nguyên nhân kết quả dựa trên dữ liệu được cung cấp, bắt đầu từ thời điểm khớp entry.
 2. Đánh giá riêng:
    - Chất lượng setup và trigger ban đầu.
    - Vị trí entry, SL và TP.
-   - Diễn biến sau entry và điều kiện đóng lệnh.
-   - Lỗi quy trình nếu có.
+   - Diễn biến SAU KHI KHỚP ENTRY và điều kiện đóng lệnh (SL/TP/manage).
+   - Lỗi quy trình nếu có (trail sai phía, đóng sớm/muộn so với path giá).
 3. Phân loại kết luận:
    - PROCESS_ERROR: có lỗi rõ ràng trong quyết định hoặc thực thi.
    - VALID_LOSS: setup hợp lệ nhưng kết quả thua.
@@ -1211,11 +1215,12 @@ class LLMAgent:
         post_trade_candles: list[dict[str, Any]] | str,
         exit_price: float | None = None,
         close_reason: str = "",
+        filled_at: str = "",
     ) -> dict[str, Any]:
         candles_str = (
             post_trade_candles
             if isinstance(post_trade_candles, str)
-            else _compact_candles(post_trade_candles, last_n=20)
+            else _compact_candles(post_trade_candles, last_n=min(48, max(20, len(post_trade_candles))))
         )
         prompt = POST_MORTEM_PROMPT.format(
             action=action,
@@ -1227,6 +1232,7 @@ class LLMAgent:
             result=result,
             pnl=pnl,
             regime=regime,
+            filled_at=filled_at or "?",
             entry_reasoning=entry_reasoning,
             post_trade_candles=candles_str,
         )
