@@ -854,18 +854,24 @@ def main() -> None:
         notifier.notify_error("startup", str(exc))
         raise SystemExit(1) from exc
 
-    # Schedule jobs
-    schedule.every(config.DECISION_INTERVAL_MINUTES).minutes.do(
+    # Schedule jobs — align to clock so each run is after H1 close (HH:00)
+    at_mm = f":{config.DECISION_AT_MINUTE:02d}"
+    schedule.every().hour.at(at_mm).do(
         safe_trade_job, binance, memory, llm, notifier, paper
     )
     schedule.every(24).hours.do(job_learn, notifier)
     schedule.every(24).hours.do(job_news, notifier)
     schedule.every().hour.do(job_compact, memory, notifier)
+    logger.info(
+        "Trade job scheduled every hour at HH%s UTC (H1 close=:00)",
+        at_mm,
+    )
 
     start_msg = (
         f"Bot khởi động lúc {datetime.now(timezone.utc).isoformat()} UTC\n"
         f"Cặp={config.SYMBOL} | Đòn bẩy={config.LEVERAGE}x | "
-        f"Chu kỳ quyết định={config.DECISION_INTERVAL_MINUTES} phút\n"
+        f"Chu kỳ quyết định=mỗi giờ lúc HH{at_mm} UTC "
+        f"(sau đóng nến 1H)\n"
     )
     if config.PAPER_MODE and paper:
         s = paper.summary()
