@@ -488,25 +488,44 @@ class PaperPortfolio:
         )
         return {"ok": True, **closed}
 
-    def update_stop_loss(self, new_sl: float) -> dict[str, Any]:
+    def update_stop_loss(
+        self,
+        new_sl: float,
+        mark_price: float | None = None,
+    ) -> dict[str, Any]:
         """Cập nhật SL (manage TRAIL). Caller phải đã validate chặt hơn."""
         data = self._read()
         position = data.get("position")
         if not position:
             return {"ok": False, "reason": "No open position"}
         old_sl = float(position["stop_loss"])
+        new_sl_f = float(new_sl)
+        side = str(position.get("action") or "").upper()
+        # Defense: refuse SL already breached by mark (would instant-close)
+        if mark_price is not None:
+            mark = float(mark_price)
+            if side == "BUY" and new_sl_f >= mark:
+                return {
+                    "ok": False,
+                    "reason": f"BUY SL {new_sl_f} >= mark {mark} — already breached",
+                }
+            if side == "SELL" and new_sl_f <= mark:
+                return {
+                    "ok": False,
+                    "reason": f"SELL SL {new_sl_f} <= mark {mark} — already breached",
+                }
         if position.get("initial_stop_loss") is None:
             position["initial_stop_loss"] = old_sl
-        position["stop_loss"] = float(new_sl)
+        position["stop_loss"] = new_sl_f
         position["sl_updated_at"] = _now_iso()
         data["position"] = position
         self._write(data)
-        logger.info("Paper TRAIL SL %s → %s", old_sl, new_sl)
+        logger.info("Paper TRAIL SL %s → %s", old_sl, new_sl_f)
         return {
             "ok": True,
             "event": "trail",
             "old_sl": old_sl,
-            "new_sl": float(new_sl),
+            "new_sl": new_sl_f,
             "position": position,
         }
 
