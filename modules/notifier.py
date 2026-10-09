@@ -144,9 +144,11 @@ class Notifier:
 
     def notify_post_mortem(self, lesson: dict[str, Any], result: str, pnl: float) -> None:
         result_u = str(result or "").upper()
+        classification = str(lesson.get("classification") or "").strip() or "—"
         text = (
             "BTC Dow/PA — Hậu phẫu lệnh\n"
             f"Kết quả: {RESULT_VI.get(result_u, result)} | PnL: {pnl:+.4f} USDT\n"
+            f"Phân loại: {classification}\n"
             f"Chế độ lúc vào: {_regime_vi(lesson.get('regime'))}\n"
             f"Nhận định: {lesson.get('mistake_or_insight')}\n"
             f"Bài học: {lesson.get('actionable_rule')}\n"
