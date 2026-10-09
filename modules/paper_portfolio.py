@@ -21,6 +21,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso_ms(value: Any) -> int | None:
+    """Parse ISO timestamp → unix ms UTC. None if invalid."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            v = int(value)
+            return v if v > 10_000_000_000 else v * 1000
+        s = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
 def _paper_path() -> Path:
     return Path(config.PATHS["PAPER_ACCOUNT"])
 
@@ -340,9 +357,11 @@ class PaperPortfolio:
         price: float,
         high: float | None = None,
         low: float | None = None,
+        path_candles: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Cập nhật theo giá live (và high/low nến gần nhất nếu có).
+        path_candles: nến 1m từ lúc fill → nay; quét tuần tự SL/TP (ưu tiên hơn 1 nến 1H).
         Trả về list event: filled / closed.
         """
         high = high if high is not None else price
@@ -362,6 +381,7 @@ class PaperPortfolio:
                     "initial_stop_loss": float(
                         pending.get("initial_stop_loss") or pending["stop_loss"]
                     ),
+                    "stop_armed": True,  # classic SL beyond entry is live immediately
                 }
                 data["pending"] = None
                 data["position"] = pos
@@ -380,21 +400,35 @@ class PaperPortfolio:
                 )
                 logger.info("Paper FILLED %s @ %s", pos["action"], pos["entry"])
 
-        # 2) Close position nếu chạm SL/TP
+        # 2) Close position nếu chạm SL/TP (path từ fill nếu có)
         data = self._read()
         position = data.get("position")
         if position:
-            exit_info = self._exit_hit(position, price, high, low)
-            if exit_info:
+            exit_info: tuple[float, str] | None
+            if path_candles:
+                exit_info, armed = self._exit_hit_on_path(
+                    position, path_candles, mark=price
+                )
+                if bool(position.get("stop_armed", True)) != armed:
+                    position = dict(position)
+                    position["stop_armed"] = armed
+                    data["position"] = position
+                    self._write(data)
+                    data = self._read()
+                    position = data.get("position")
+            else:
+                exit_info = self._exit_hit(position, price, high, low)
+            if exit_info and position:
                 exit_price, reason = exit_info
                 closed = self._close_position(data, position, exit_price, reason)
                 events.append(closed)
                 logger.info(
-                    "Paper CLOSED %s %s pnl=%.4f bal=%.2f",
+                    "Paper CLOSED %s %s pnl=%.4f bal=%.2f path_bars=%s",
                     reason,
                     position["action"],
                     closed["pnl"],
                     closed["balance"],
+                    len(path_candles or []),
                 )
 
         return events
@@ -421,6 +455,120 @@ class PaperPortfolio:
             return low <= entry
         return high >= entry
 
+    @classmethod
+    def _exit_hit_on_path(
+        cls,
+        position: dict[str, Any],
+        candles: list[dict[str, Any]],
+        *,
+        mark: float,
+    ) -> tuple[tuple[float, str] | None, bool]:
+        """
+        Quét nến từ lúc fill theo thứ tự thời gian.
+        Trả (exit|None, stop_armed).
+        """
+        fill_ms = _parse_iso_ms(position.get("filled_at")) or 0
+        entry = float(position.get("fill_price") or position.get("entry") or 0)
+        action = str(position.get("action") or "").upper()
+        sl = float(position["stop_loss"])
+        # Profit-lock stop (SELL SL < entry / BUY SL > entry) needs arming first
+        armed = bool(position.get("stop_armed", True))
+        if action == "SELL" and sl < entry:
+            armed = bool(position.get("stop_armed", False))
+        elif action == "BUY" and sl > entry:
+            armed = bool(position.get("stop_armed", False))
+
+        ordered = sorted(candles, key=lambda c: int(c.get("open_time") or 0))
+        for c in ordered:
+            ot = int(c.get("open_time") or 0)
+            if fill_ms and ot + 60_000 < fill_ms:
+                # bar fully before fill — skip
+                continue
+            hi = float(c.get("high", c.get("close", mark)))
+            lo = float(c.get("low", c.get("close", mark)))
+            cl = float(c.get("close", mark))
+            was_armed = armed
+            armed = cls._update_stop_arm(action, entry, sl, lo, hi, cl, armed)
+            # Profit-lock: không đóng SL ngay nến vừa arm (OHLC không biết thứ tự wick)
+            hit = cls._exit_hit_bar(
+                action,
+                entry,
+                sl,
+                float(position["take_profit"]),
+                lo,
+                hi,
+                cl,
+                was_armed,
+            )
+            if hit:
+                return hit, armed
+
+        # Final mark tick — dùng trạng thái armed sau path
+        armed = cls._update_stop_arm(action, entry, sl, mark, mark, mark, armed)
+        hit = cls._exit_hit_bar(
+            action,
+            entry,
+            sl,
+            float(position["take_profit"]),
+            mark,
+            mark,
+            mark,
+            armed,
+        )
+        return hit, armed
+
+    @staticmethod
+    def _update_stop_arm(
+        action: str,
+        entry: float,
+        sl: float,
+        low: float,
+        high: float,
+        close: float,
+        armed: bool,
+    ) -> bool:
+        """Arm profit-lock stop only after price trades through the stop level."""
+        if armed:
+            return True
+        if action == "SELL" and sl < entry:
+            # Short lock: arm when price has been at/below SL
+            return low <= sl or close <= sl
+        if action == "BUY" and sl > entry:
+            return high >= sl or close >= sl
+        return True
+
+    @staticmethod
+    def _exit_hit_bar(
+        action: str,
+        entry: float,
+        sl: float,
+        tp: float,
+        low: float,
+        high: float,
+        price: float,
+        armed: bool,
+    ) -> tuple[float, str] | None:
+        if action == "BUY":
+            # SL before TP if both touched (adverse assumption)
+            if sl <= entry:
+                if low <= sl or price <= sl:
+                    return sl, "SL"
+            elif armed and (low <= sl or price <= sl):
+                # Profit-lock SL above entry: only after armed
+                return sl, "SL"
+            if high >= tp or price >= tp:
+                return tp, "TP"
+        else:
+            # Adverse first: SL (price up) before TP (price down) if both in bar
+            if sl >= entry:
+                if high >= sl or price >= sl:
+                    return sl, "SL"
+            elif armed and (high >= sl or price >= sl):
+                return sl, "SL"
+            if low <= tp or price <= tp:
+                return tp, "TP"
+        return None
+
     @staticmethod
     def _exit_hit(
         position: dict[str, Any],
@@ -428,30 +576,23 @@ class PaperPortfolio:
         high: float,
         low: float,
     ) -> tuple[float, str] | None:
-        action = position["action"]
+        action = str(position.get("action") or "").upper()
+        entry = float(position.get("fill_price") or position.get("entry") or 0)
         sl = float(position["stop_loss"])
         tp = float(position["take_profit"])
-
-        if action == "BUY":
-            # SL trước nếu cùng nến quét cả hai (giả định xấu hơn)
-            if low <= sl:
-                return sl, "SL"
-            if high >= tp:
-                return tp, "TP"
-            if price <= sl:
-                return sl, "SL"
-            if price >= tp:
-                return tp, "TP"
-        else:
-            if high >= sl:
-                return sl, "SL"
-            if low <= tp:
-                return tp, "TP"
-            if price >= sl:
-                return sl, "SL"
-            if price <= tp:
-                return tp, "TP"
-        return None
+        armed = bool(position.get("stop_armed", True))
+        if action == "SELL" and sl < entry:
+            armed = bool(position.get("stop_armed", False))
+            # Without path: refuse SL if stop already below mark (breached / not armed)
+            if not armed and price > sl:
+                armed = False
+        elif action == "BUY" and sl > entry:
+            armed = bool(position.get("stop_armed", False))
+            if not armed and price < sl:
+                armed = False
+        return PaperPortfolio._exit_hit_bar(
+            action, entry, sl, tp, low, high, price, armed
+        )
 
     def cancel_pending(self) -> dict[str, Any]:
         """Hủy lệnh chờ khớp (manage CANCEL_PENDING)."""
@@ -516,8 +657,17 @@ class PaperPortfolio:
                 }
         if position.get("initial_stop_loss") is None:
             position["initial_stop_loss"] = old_sl
+        entry = float(position.get("fill_price") or position.get("entry") or 0)
         position["stop_loss"] = new_sl_f
         position["sl_updated_at"] = _now_iso()
+        # Profit-lock: arm ngay nếu mark đã đi qua SL (đúng phía lãi); else chờ path
+        mark_f = float(mark_price) if mark_price is not None else None
+        if side == "SELL" and new_sl_f < entry:
+            position["stop_armed"] = bool(mark_f is not None and mark_f <= new_sl_f)
+        elif side == "BUY" and new_sl_f > entry:
+            position["stop_armed"] = bool(mark_f is not None and mark_f >= new_sl_f)
+        else:
+            position["stop_armed"] = True
         data["position"] = position
         self._write(data)
         logger.info("Paper TRAIL SL %s → %s", old_sl, new_sl_f)
