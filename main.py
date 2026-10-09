@@ -359,6 +359,7 @@ def handle_closed_position(
         mistake_or_insight=lesson.get("mistake_or_insight", ""),
         actionable_rule=lesson.get("actionable_rule", ""),
         weight=int(lesson.get("weight", 1) or 1),
+        classification=str(lesson.get("classification") or ""),
     )
     stats = memory.record_closed_trade(result)
     notifier.notify_post_mortem(lesson, result, pnl)
@@ -408,6 +409,7 @@ def handle_paper_closed(
         mistake_or_insight=lesson.get("mistake_or_insight", ""),
         actionable_rule=lesson.get("actionable_rule", ""),
         weight=int(lesson.get("weight", 1) or 1),
+        classification=str(lesson.get("classification") or ""),
     )
     stats = memory.record_closed_trade(result)
     notifier.notify_post_mortem(lesson, result, pnl)
