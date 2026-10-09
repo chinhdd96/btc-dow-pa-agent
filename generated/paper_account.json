@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 1002.0101911728332,
+  "balance": 1003.3049452911239,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 82255.0,
-    "stop_loss": 81900.0,
-    "initial_stop_loss": 82350.0,
-    "take_profit": 80900.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.00364719469941037,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Mô hình failed breakout trên kháng cự kết hợp với bias giảm trên 1H cho thấy khả năng giá sẽ quay lại phía dưới. R:R > 1.2, setup_score > 5, win_probability > 0.6 → có edge đủ để vào lệnh bán. Nếu giá tái chiếm kháng cự, lệnh sẽ bị hủy (invalidation).",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.65,
-    "trigger": "Breakout thất bại trên kháng cự R≈82282.8, nến cao chạm 82299.6 rồi đóng lại dưới mức kháng cự, kèm sweep high back",
-    "invalidation": "Giá tái chiếm và đóng trên mức kháng cự R",
-    "created_at": "2026-10-09T02:53:21.497178+00:00",
-    "filled_at": "2026-10-09T02:53:23.223942+00:00",
-    "fill_price": 82255.0,
-    "sl_updated_at": "2026-10-09T03:05:07.701411+00:00"
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -135,12 +114,30 @@
       "win_probability": 0.64,
       "opened_at": "2026-10-08T22:00:02.394395+00:00",
       "closed_at": "2026-10-08T23:00:14.085800+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 82255.0,
+      "exit": 81900.0,
+      "sl": 81900.0,
+      "tp": 80900.0,
+      "quantity": 0.00364719469941037,
+      "margin": 100.0,
+      "pnl": 1.2948,
+      "result": "WIN",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Mô hình failed breakout trên kháng cự kết hợp với bias giảm trên 1H cho thấy khả năng giá sẽ quay lại phía dưới. R:R > 1.2, setup_score > 5, win_probability > 0.6 → có edge đủ để vào lệnh bán. Nếu giá tái chiếm kháng cự, lệnh sẽ bị hủy (invalidation).",
+      "signal_level": 2,
+      "win_probability": 0.65,
+      "opened_at": "2026-10-09T02:53:23.223942+00:00",
+      "closed_at": "2026-10-09T04:05:02.610135+00:00"
     }
   ],
   "stats": {
-    "total_trades": 6,
-    "wins": 3,
+    "total_trades": 7,
+    "wins": 4,
     "losses": 3,
-    "realized_pnl": 2.0101911728331148
+    "realized_pnl": 3.304945291123796
   }
 }
