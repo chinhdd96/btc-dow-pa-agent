@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 996.9061084096664,
+  "balance": 996.5075576850288,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 82800.0,
-    "stop_loss": 82910.0,
-    "initial_stop_loss": 82910.0,
-    "take_profit": 82350.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0036231884057971015,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Thị trường đang trong giai đoạn sideway chop với mức kháng cự rõ ràng. Một sweep giá lên trên kháng cự đã thất bại và giá quay lại dưới, kèm theo một bearish inside bar, cho thấy áp lực bán mạnh đang chiếm ưu thế. Với entry ở 82800, SL đặt trên mức kháng cự + 110 (≈1 ATR/2) để bảo vệ khỏi một breakout thực sự, TP hướng tới mức hỗ trợ dưới của range (~82500) hoặc trung điểm, mang lại R:R >4 và xác suất thắng khoảng 62%. Do đó, tín hiệu bán được đánh giá là hợp lý.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.62,
-    "trigger": "Sweep high back into range with bearish inside bar at resistance",
-    "invalidation": "Giá tái chiếm lại mức kháng cự trên 82830 và đóng trên mức này",
-    "created_at": "2026-10-10T11:05:09.628003+00:00",
-    "filled_at": "2026-10-10T11:05:11.313062+00:00",
-    "fill_price": 82800.0,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -225,12 +204,30 @@
       "win_probability": 0.63,
       "opened_at": "2026-10-10T07:05:10.636355+00:00",
       "closed_at": "2026-10-10T10:05:02.558579+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 82800.0,
+      "exit": 82910.0,
+      "sl": 82910.0,
+      "tp": 82350.0,
+      "quantity": 0.0036231884057971015,
+      "margin": 100.0,
+      "pnl": -0.3986,
+      "result": "LOSS",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Thị trường đang trong giai đoạn sideway chop với mức kháng cự rõ ràng. Một sweep giá lên trên kháng cự đã thất bại và giá quay lại dưới, kèm theo một bearish inside bar, cho thấy áp lực bán mạnh đang chiếm ưu thế. Với entry ở 82800, SL đặt trên mức kháng cự + 110 (≈1 ATR/2) để bảo vệ khỏi một breakout thực sự, TP hướng tới mức hỗ trợ dưới của range (~82500) hoặc trung điểm, mang lại R:R >4 và xác suất thắng khoảng 62%. Do đó, tín hiệu bán được đánh giá là hợp lý.",
+      "signal_level": 2,
+      "win_probability": 0.62,
+      "opened_at": "2026-10-10T11:05:11.313062+00:00",
+      "closed_at": "2026-10-10T15:05:03.083694+00:00"
     }
   ],
   "stats": {
-    "total_trades": 11,
+    "total_trades": 12,
     "wins": 4,
-    "losses": 7,
-    "realized_pnl": -3.0938915903335884
+    "losses": 8,
+    "realized_pnl": -3.4924423149712696
   }
 }
