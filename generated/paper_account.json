@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 997.5196721226885,
+  "balance": 996.9061084096664,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 82680.9,
-    "stop_loss": 82850.0,
-    "initial_stop_loss": 82850.0,
-    "take_profit": 82200.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0036284075282199397,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Giá đã thực hiện một high sweep lên trên kháng cự rồi thất bại, ngay sau đó xuất hiện bearish inside bar, cho thấy áp lực bán mạnh. Với bias giảm giá ngắn hạn, đặt lệnh bán ngay tại mức giá hiện tại, SL đặt trên đỉnh sweep (≈82850) và TP hướng tới hỗ trợ gần nhất (≈82200) cho R:R > 2, đáp ứng tiêu chí edge dương và win probability trên 60%.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.63,
-    "trigger": "High sweep vượt mức kháng cự 82828.7 rồi quay lại dưới, tạo inside bar giảm giá (bearish) ngay tại mức kháng cự",
-    "invalidation": "Giá phá lại trên 82830 và giữ trên mức đó ít nhất 2 nến liên tiếp",
-    "created_at": "2026-10-10T07:05:08.980085+00:00",
-    "filled_at": "2026-10-10T07:05:10.636355+00:00",
-    "fill_price": 82680.9,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -207,12 +186,30 @@
       "win_probability": 0.65,
       "opened_at": "2026-10-09T15:05:11.832256+00:00",
       "closed_at": "2026-10-09T19:05:01.893750+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 82680.9,
+      "exit": 82850.0,
+      "sl": 82850.0,
+      "tp": 82200.0,
+      "quantity": 0.0036284075282199397,
+      "margin": 100.0,
+      "pnl": -0.6136,
+      "result": "LOSS",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Giá đã thực hiện một high sweep lên trên kháng cự rồi thất bại, ngay sau đó xuất hiện bearish inside bar, cho thấy áp lực bán mạnh. Với bias giảm giá ngắn hạn, đặt lệnh bán ngay tại mức giá hiện tại, SL đặt trên đỉnh sweep (≈82850) và TP hướng tới hỗ trợ gần nhất (≈82200) cho R:R > 2, đáp ứng tiêu chí edge dương và win probability trên 60%.",
+      "signal_level": 2,
+      "win_probability": 0.63,
+      "opened_at": "2026-10-10T07:05:10.636355+00:00",
+      "closed_at": "2026-10-10T10:05:02.558579+00:00"
     }
   ],
   "stats": {
-    "total_trades": 10,
+    "total_trades": 11,
     "wins": 4,
-    "losses": 6,
-    "realized_pnl": -2.4803278773115753
+    "losses": 7,
+    "realized_pnl": -3.0938915903335884
   }
 }
