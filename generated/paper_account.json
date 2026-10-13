@@ -4,7 +4,25 @@
   "balance": 994.3814132843437,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "SELL",
+    "entry": 83450.0,
+    "stop_loss": 84200.0,
+    "initial_stop_loss": 84200.0,
+    "take_profit": 82200.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.0035949670461354103,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Trong môi trường sideway chop, breakout lên đã bị thổi lại (failed breakout). Theo quy tắc sideway chop, bán sau failed breakout với SL đặt trên high của breakout (≈84200) và TP ở swing low mạnh (≈82200) cho R:R >1.2. Xác suất thắng ước tính ~62% và setup_score đạt ngưỡng cho phép vào lệnh.",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.62,
+    "trigger": "Sweep high vượt mức kháng cự R≈83499, đóng lại dưới mức kháng cự và phá mức low địa phương 83063, tạo tín hiệu phá breakout thất bại",
+    "invalidation": "Giá tái chiếm lại mức kháng cự trên R hoặc phá lại high của breakout",
+    "created_at": "2026-10-13T14:05:11.255949+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
