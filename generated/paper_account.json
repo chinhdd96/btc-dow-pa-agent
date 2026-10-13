@@ -1,32 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 994.3814132843437,
+  "balance": 993.8378037029656,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 83450.0,
-    "stop_loss": 84200.0,
-    "initial_stop_loss": 84200.0,
-    "take_profit": 82200.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0035949670461354103,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Trong môi trường sideway chop, breakout lên đã bị thổi lại (failed breakout). Theo quy tắc sideway chop, bán sau failed breakout với SL đặt trên high của breakout (≈84200) và TP ở swing low mạnh (≈82200) cho R:R >1.2. Xác suất thắng ước tính ~62% và setup_score đạt ngưỡng cho phép vào lệnh.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.62,
-    "trigger": "Sweep high vượt mức kháng cự R≈83499, đóng lại dưới mức kháng cự và phá mức low địa phương 83063, tạo tín hiệu phá breakout thất bại",
-    "invalidation": "Giá tái chiếm lại mức kháng cự trên R hoặc phá lại high của breakout",
-    "created_at": "2026-10-13T14:05:11.255949+00:00",
-    "filled_at": "2026-10-13T14:05:13.419576+00:00",
-    "fill_price": 83450.0,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -297,12 +276,30 @@
       "win_probability": 0.62,
       "opened_at": "2026-10-13T09:05:12.573501+00:00",
       "closed_at": "2026-10-13T10:05:02.454379+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 83450.0,
+      "exit": 83601.21406522,
+      "sl": 84200.0,
+      "tp": 82200.0,
+      "quantity": 0.0035949670461354103,
+      "margin": 100.0,
+      "pnl": -0.5436,
+      "result": "LOSS",
+      "reason": "MANAGE_CLOSE",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Trong môi trường sideway chop, breakout lên đã bị thổi lại (failed breakout). Theo quy tắc sideway chop, bán sau failed breakout với SL đặt trên high của breakout (≈84200) và TP ở swing low mạnh (≈82200) cho R:R >1.2. Xác suất thắng ước tính ~62% và setup_score đạt ngưỡng cho phép vào lệnh.",
+      "signal_level": 2,
+      "win_probability": 0.62,
+      "opened_at": "2026-10-13T14:05:13.419576+00:00",
+      "closed_at": "2026-10-13T15:05:06.645362+00:00"
     }
   ],
   "stats": {
-    "total_trades": 15,
+    "total_trades": 16,
     "wins": 5,
-    "losses": 10,
-    "realized_pnl": -5.618586715656429
+    "losses": 11,
+    "realized_pnl": -6.162196297034511
   }
 }
