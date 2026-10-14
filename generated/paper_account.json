@@ -8,7 +8,7 @@
   "position": {
     "action": "SELL",
     "entry": 83470.0,
-    "stop_loss": 84200.0,
+    "stop_loss": 83430.0,
     "initial_stop_loss": 84200.0,
     "take_profit": 80990.0,
     "margin": 100.0,
@@ -25,7 +25,8 @@
     "created_at": "2026-10-13T16:05:10.098556+00:00",
     "filled_at": "2026-10-13T16:05:12.004994+00:00",
     "fill_price": 83470.0,
-    "stop_armed": true
+    "stop_armed": true,
+    "sl_updated_at": "2026-10-14T11:05:09.196710+00:00"
   },
   "closed_trades": [
     {
