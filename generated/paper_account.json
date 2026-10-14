@@ -1,33 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 993.8378037029656,
+  "balance": 993.9815679296339,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 83470.0,
-    "stop_loss": 83430.0,
-    "initial_stop_loss": 84200.0,
-    "take_profit": 80990.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.003594105666706601,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Với cấu trúc range và tín hiệu failed breakout lên phía trên, xu hướng ngắn hạn là giảm. Sweep high back cho thấy lực bán mạnh đã thắng sau khi giá không duy trì trên mức kháng cự. Đặt lệnh bán ngay tại mức giá hiện tại, SL trên mức high của sweep (≈84200) để tránh dừng lỗ do dao động nội bộ, TP ở mức low của range (≈80990) cho R:R ≈3.4, đáp ứng yêu cầu R:R ≥1.2 và win_probability ≈65%.",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.65,
-    "trigger": "Sweep high back với giá chạm mức kháng cự 84134.2 rồi quay lại dưới mức này",
-    "invalidation": "Giá tái chiếm lại mức kháng cự trên (>= 84200) sau khi đã quay lại",
-    "created_at": "2026-10-13T16:05:10.098556+00:00",
-    "filled_at": "2026-10-13T16:05:12.004994+00:00",
-    "fill_price": 83470.0,
-    "stop_armed": true,
-    "sl_updated_at": "2026-10-14T11:05:09.196710+00:00"
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -316,12 +294,33 @@
       "win_probability": 0.62,
       "opened_at": "2026-10-13T14:05:13.419576+00:00",
       "closed_at": "2026-10-13T15:05:06.645362+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 83470.0,
+      "exit": 83430.0,
+      "sl": 83430.0,
+      "tp": 80990.0,
+      "quantity": 0.003594105666706601,
+      "margin": 100.0,
+      "pnl": 0.1438,
+      "result": "WIN",
+      "reason": "SL",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Với cấu trúc range và tín hiệu failed breakout lên phía trên, xu hướng ngắn hạn là giảm. Sweep high back cho thấy lực bán mạnh đã thắng sau khi giá không duy trì trên mức kháng cự. Đặt lệnh bán ngay tại mức giá hiện tại, SL trên mức high của sweep (≈84200) để tránh dừng lỗ do dao động nội bộ, TP ở mức low của range (≈80990) cho R:R ≈3.4, đáp ứng yêu cầu R:R ≥1.2 và win_probability ≈65%.",
+      "signal_level": 2,
+      "win_probability": 0.65,
+      "setup_tag": "",
+      "trigger": "Sweep high back với giá chạm mức kháng cự 84134.2 rồi quay lại dưới mức này",
+      "initial_r": null,
+      "opened_at": "2026-10-13T16:05:12.004994+00:00",
+      "closed_at": "2026-10-14T12:05:03.151960+00:00"
     }
   ],
   "stats": {
-    "total_trades": 16,
-    "wins": 5,
+    "total_trades": 17,
+    "wins": 6,
     "losses": 11,
-    "realized_pnl": -6.162196297034511
+    "realized_pnl": -6.018432070366248
   }
 }
