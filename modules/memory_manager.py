@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
+import requests
 from openai import OpenAI
 
 import config
@@ -88,6 +90,10 @@ class MemoryManager:
             json.dump(data, tmp, ensure_ascii=False, indent=2)
             tmp_path = Path(tmp.name)
         tmp_path.replace(self.path)
+        try:
+            backup_remote(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory backup skipped: %s", exc)
 
     def load(self) -> dict[str, Any]:
         return self._read()
@@ -109,13 +115,33 @@ class MemoryManager:
     def get_all_lessons_summary(self, top_n_per_regime: int = 3) -> str:
         data = self._read()
         lines: list[str] = []
+        # Prefer PROCESS_ERROR first across regimes
+        flat: list[tuple[int, str, dict[str, Any]]] = []
         for regime, lessons in data["lessons_by_regime"].items():
-            ranked = sorted(lessons, key=lambda x: int(x.get("weight", 1)), reverse=True)
-            for item in ranked[:top_n_per_regime]:
-                rule = item.get("actionable_rule") or item.get("mistake_or_insight") or ""
-                weight = item.get("weight", 1)
-                if rule:
-                    lines.append(f"[{regime} w={weight}] {rule}")
+            for item in lessons:
+                cls = str(item.get("classification") or "").upper()
+                pri = 2 if cls == "PROCESS_ERROR" else 1
+                flat.append((pri, regime, item))
+        flat.sort(
+            key=lambda x: (
+                -x[0],
+                -int(x[2].get("weight", 1) or 1),
+                -int(x[2].get("evidence_n", 1) or 1),
+            )
+        )
+        per_regime: dict[str, int] = {}
+        for _pri, regime, item in flat:
+            n = per_regime.get(regime, 0)
+            if n >= top_n_per_regime:
+                continue
+            per_regime[regime] = n + 1
+            rule = item.get("actionable_rule") or item.get("mistake_or_insight") or ""
+            weight = item.get("weight", 1)
+            ev = item.get("evidence_n", 1)
+            tag = item.get("setup_tag") or ""
+            if rule:
+                extra = f" tag={tag}" if tag else ""
+                lines.append(f"[{regime} w={weight} n={ev}{extra}] {rule}")
         return "\n".join(lines) if lines else "Chưa có bài học thực chiến."
 
     def record_closed_trade(self, result: str) -> dict[str, Any]:
@@ -146,6 +172,10 @@ class MemoryManager:
         actionable_rule: str,
         weight: int = 1,
         classification: str = "",
+        setup_tag: str = "",
+        close_reason: str = "",
+        pnl: float | None = None,
+        r_multiple: float | None = None,
     ) -> None:
         data = self._read()
         key = _memory_regime_bucket(regime)
@@ -154,15 +184,49 @@ class MemoryManager:
         except (TypeError, ValueError):
             w = 1
         w = max(1, min(3, w))
+        rule_key = (actionable_rule or "").strip().lower()
+        lessons = data["lessons_by_regime"][key]
+        if rule_key:
+            for existing in lessons:
+                if (existing.get("actionable_rule") or "").strip().lower() == rule_key:
+                    existing["evidence_n"] = int(existing.get("evidence_n", 1) or 1) + 1
+                    existing["weight"] = max(
+                        int(existing.get("weight", 1) or 1),
+                        w,
+                        2 if existing["evidence_n"] >= 3 else 1,
+                    )
+                    if classification:
+                        existing["classification"] = str(classification)
+                    if setup_tag:
+                        existing["setup_tag"] = str(setup_tag)
+                    if close_reason:
+                        existing["close_reason"] = str(close_reason)
+                    if pnl is not None:
+                        existing["last_pnl"] = float(pnl)
+                    if r_multiple is not None:
+                        existing["last_r"] = float(r_multiple)
+                    if mistake_or_insight:
+                        existing["mistake_or_insight"] = mistake_or_insight
+                    self._write(data)
+                    return
         item: dict[str, Any] = {
             "regime": key,
             "mistake_or_insight": mistake_or_insight,
             "actionable_rule": actionable_rule,
             "weight": w,
+            "evidence_n": 1,
         }
         if classification:
             item["classification"] = str(classification)
-        data["lessons_by_regime"][key].append(item)
+        if setup_tag:
+            item["setup_tag"] = str(setup_tag)
+        if close_reason:
+            item["close_reason"] = str(close_reason)
+        if pnl is not None:
+            item["last_pnl"] = float(pnl)
+        if r_multiple is not None:
+            item["last_r"] = float(r_multiple)
+        lessons.append(item)
         self._write(data)
 
     def compact_memory(self) -> str:
@@ -251,3 +315,109 @@ class MemoryManager:
                 bucket[key] = dict(item)
                 bucket[key]["weight"] = int(item.get("weight", 1) or 1)
         return list(bucket.values())
+
+
+def _github_headers() -> dict[str, str] | None:
+    tok = config.HISTORY_GITHUB_TOKEN
+    if not tok:
+        return None
+    return {
+        "Authorization": f"token {tok}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "btc-dow-pa-agent-memory",
+    }
+
+
+def backup_remote(data: dict[str, Any] | None = None) -> bool:
+    headers = _github_headers()
+    if not headers:
+        return False
+    path_local = Path(config.PATHS["MEMORY"])
+    if data is None:
+        if not path_local.exists():
+            return False
+        try:
+            data = json.loads(path_local.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+    try:
+        from modules.decision_history import (
+            _ensure_history_branch,
+            _github_contents_url,
+        )
+
+        repo = config.HISTORY_GITHUB_REPO
+        remote = config.MEMORY_GITHUB_PATH
+        branch = config.HISTORY_GITHUB_BRANCH or "history-data"
+        if not _ensure_history_branch(headers, repo, branch):
+            return False
+        content_b64 = base64.b64encode(
+            json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        ).decode("ascii")
+        meta = requests.get(
+            _github_contents_url(repo, remote, branch), headers=headers, timeout=30
+        )
+        sha = meta.json().get("sha") if meta.status_code == 200 else None
+        body: dict[str, Any] = {
+            "message": "chore: sync memory.json for Blitz persistence",
+            "content": content_b64,
+            "branch": branch,
+        }
+        if sha:
+            body["sha"] = sha
+        put = requests.put(
+            _github_contents_url(repo, remote),
+            headers=headers,
+            json=body,
+            timeout=60,
+        )
+        if put.status_code not in {200, 201}:
+            logger.warning("memory PUT HTTP %s", put.status_code)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory backup failed: %s", exc)
+        return False
+
+
+def restore_from_remote() -> bool:
+    path = Path(config.PATHS["MEMORY"])
+    if path.exists():
+        try:
+            cur = json.loads(path.read_text(encoding="utf-8"))
+            lessons = cur.get("lessons_by_regime") or {}
+            if any(lessons.get(r) for r in lessons):
+                return False
+            if int((cur.get("system_stats") or {}).get("total_trades") or 0) > 0:
+                return False
+        except (OSError, json.JSONDecodeError):
+            pass
+    headers = _github_headers()
+    if not headers:
+        return False
+    try:
+        from modules.decision_history import _github_contents_url
+
+        repo = config.HISTORY_GITHUB_REPO
+        remote = config.MEMORY_GITHUB_PATH
+        branch = config.HISTORY_GITHUB_BRANCH or "history-data"
+        resp = requests.get(
+            _github_contents_url(repo, remote, branch), headers=headers, timeout=30
+        )
+        if resp.status_code != 200:
+            return False
+        raw = base64.b64decode(resp.json().get("content") or "").decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("memory restored from remote")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory restore failed: %s", exc)
+        return False
+
+
+def ensure_restored() -> bool:
+    return restore_from_remote()
