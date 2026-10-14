@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "stable": false,
+  "updated_at": "2026-10-14T12:05:16.580835+00:00",
+  "closes_at_review": 17,
+  "freeze": false,
+  "rules": [],
+  "last_summary": "meta_review error: No JSON object found in LLM response: '{\\n  \"rules\": [\\n    {\\n      \"when\": \"Giá phá xuống dưới mức thấp nhất của swing gần nhất (breakdown) và signal_level ≥ 3\",\\n      \"action\": \"ENTER SELL\",\\n      \"reason\": \"Breakdown có kỳ vọng dương (+0.371) và tỷ lệ thắng 100% trong dữ liệu h'"
+}
