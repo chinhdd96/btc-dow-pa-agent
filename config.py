@@ -65,6 +65,29 @@ HISTORY_GITHUB_BRANCH = os.getenv("HISTORY_GITHUB_BRANCH", "history-data").strip
 PAPER_GITHUB_PATH = os.getenv(
     "PAPER_GITHUB_PATH", "generated/paper_account.json"
 ).strip()
+MEMORY_GITHUB_PATH = os.getenv("MEMORY_GITHUB_PATH", "generated/memory.json").strip()
+ADAPTIVE_RULES_GITHUB_PATH = os.getenv(
+    "ADAPTIVE_RULES_GITHUB_PATH", "generated/adaptive_rules.json"
+).strip()
+
+# Self-improve / profit-first learning loop
+ADAPTIVE_CHOP_BONUS = float(os.getenv("ADAPTIVE_CHOP_BONUS", "1.5"))
+CHOP_MIN_RR = float(os.getenv("CHOP_MIN_RR", "1.5"))
+QUALITY_WIN_MIN_R = float(os.getenv("QUALITY_WIN_MIN_R", "0.3"))
+SETUP_BLOCK_MIN_TRADES = int(os.getenv("SETUP_BLOCK_MIN_TRADES", "8"))
+META_REVIEW_EVERY_N_CLOSES = int(os.getenv("META_REVIEW_EVERY_N_CLOSES", "10"))
+META_REVIEW_ROLLING_N = int(os.getenv("META_REVIEW_ROLLING_N", "30"))
+META_REVIEW_TARGET_QUALITY_WR = float(
+    os.getenv("META_REVIEW_TARGET_QUALITY_WR", "0.40")
+)
+META_REVIEW_MIN_TP_RATIO = float(os.getenv("META_REVIEW_MIN_TP_RATIO", "0.20"))
+MANAGE_NEAR_SL_PCT = float(os.getenv("MANAGE_NEAR_SL_PCT", "0.35"))
+MANAGE_MAX_HOURS = float(os.getenv("MANAGE_MAX_HOURS", "18"))
+MANAGE_DEEP_LOSS_R = float(os.getenv("MANAGE_DEEP_LOSS_R", "0.5"))
+MANAGE_CLOSE_MIN_SCORE = float(os.getenv("MANAGE_CLOSE_MIN_SCORE", "4.5"))
+ZERO_TRADE_HOURS = float(os.getenv("ZERO_TRADE_HOURS", "48"))
+TRADE_STATS_MAX_CHARS = int(os.getenv("TRADE_STATS_MAX_CHARS", "600"))
+ADAPTIVE_RULES_MAX = int(os.getenv("ADAPTIVE_RULES_MAX", "12"))
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
@@ -112,7 +135,7 @@ LLM_MODEL = (
 # Prompt size — Groq TPM ~8k tokens: ưu tiên structure + core; CSV mỏng
 CORE_PLAYBOOK_MAX_CHARS = int(os.getenv("CORE_PLAYBOOK_MAX_CHARS", "3800"))
 DAILY_PLAYBOOK_MAX_CHARS = int(os.getenv("DAILY_PLAYBOOK_MAX_CHARS", "1500"))
-MEMORY_LESSONS_MAX_CHARS = int(os.getenv("MEMORY_LESSONS_MAX_CHARS", "500"))
+MEMORY_LESSONS_MAX_CHARS = int(os.getenv("MEMORY_LESSONS_MAX_CHARS", "900"))
 NEWS_SUMMARY_MAX_CHARS = int(os.getenv("NEWS_SUMMARY_MAX_CHARS", "500"))
 # CSV trong prompt (structure vẫn tính trên toàn bộ fetch)
 # 1D chỉ vài nến gần — regime lấy từ structure; 4H/1H đủ soi PA
@@ -140,4 +163,5 @@ PATHS = {
     "STATE": str(BASE_DIR / "generated" / "runtime_state.json"),
     "PAPER_ACCOUNT": str(BASE_DIR / "generated" / "paper_account.json"),
     "DECISION_HISTORY": str(BASE_DIR / "generated" / "decision_history.jsonl"),
+    "ADAPTIVE_RULES": str(BASE_DIR / "generated" / "adaptive_rules.json"),
 }
