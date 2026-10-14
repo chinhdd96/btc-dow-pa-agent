@@ -1,0 +1,27 @@
+{
+  "system_stats": {
+    "total_trades": 0,
+    "win_rate": 0.0,
+    "consecutive_losses": 0,
+    "current_min_score": 6.0
+  },
+  "lessons_by_regime": {
+    "REGIME_UPTREND": [],
+    "REGIME_DOWNTREND": [],
+    "REGIME_SIDEWAY_CHOP": [
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "SL được đặt sai phía cho lệnh bán (đặt dưới mức vào lệnh), gây nhầm lẫn và có thể dẫn tới việc đóng lệnh sớm khi giá di chuyển có lợi.",
+        "actionable_rule": "Khi vào lệnh bán, mức dừng lỗ phải luôn được đặt ở phía trên mức vào lệnh (giá cao hơn) để bảo vệ rủi ro; nếu đặt dưới, đây là lỗi quy trình cần sửa.",
+        "weight": 3,
+        "evidence_n": 1,
+        "classification": "PROCESS_ERROR",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": 0.1438,
+        "last_r": 1.0002488333333335
+      }
+    ],
+    "REGIME_HIGH_VOLATILITY_NEWS": []
+  }
+}
