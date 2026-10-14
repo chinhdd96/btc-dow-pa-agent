@@ -288,6 +288,12 @@ class PaperPortfolio:
     def get_open_position(self) -> dict[str, Any] | None:
         return self._read().get("position")
 
+    def closed_trades(self, n: int | None = None) -> list[dict[str, Any]]:
+        trades = list(self._read().get("closed_trades") or [])
+        if n is None:
+            return trades
+        return trades[-max(0, int(n)) :]
+
     def place_signal(
         self,
         action: str,
@@ -302,6 +308,7 @@ class PaperPortfolio:
         win_probability: float | None = None,
         trigger: str = "",
         invalidation: str = "",
+        setup_tag: str = "",
     ) -> dict[str, Any]:
         """Đăng ký lệnh paper. MARKET khớp ngay nếu giá đã chạm entry; LIMIT chờ."""
         action = action.upper()
@@ -318,11 +325,13 @@ class PaperPortfolio:
 
         notional = margin * float(config.LEVERAGE)
         qty = notional / entry if entry > 0 else 0.0
+        initial_r = abs(float(entry) - float(stop_loss)) * qty if entry and stop_loss else 0.0
         pending = {
             "action": action,
             "entry": float(entry),
             "stop_loss": float(stop_loss),
             "initial_stop_loss": float(stop_loss),
+            "initial_r": round(initial_r, 6),
             "take_profit": float(take_profit),
             "margin": margin,
             "leverage": int(config.LEVERAGE),
@@ -335,6 +344,7 @@ class PaperPortfolio:
             "win_probability": win_probability,
             "trigger": trigger,
             "invalidation": invalidation,
+            "setup_tag": setup_tag,
             "created_at": _now_iso(),
         }
         data["pending"] = pending
@@ -720,6 +730,9 @@ class PaperPortfolio:
             "reasoning": position.get("reasoning", ""),
             "signal_level": position.get("signal_level"),
             "win_probability": position.get("win_probability"),
+            "setup_tag": position.get("setup_tag") or "",
+            "trigger": position.get("trigger") or "",
+            "initial_r": position.get("initial_r"),
             "opened_at": position.get("filled_at"),
             "closed_at": _now_iso(),
         }
