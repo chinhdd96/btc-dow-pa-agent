@@ -21,15 +21,18 @@ import schedule
 
 import config
 from modules.binance_client import BinanceClient, BinanceClientError
+from modules import adaptive_rules
 from modules import candle_store
 from modules import decision_history
 from modules.learner_crawler import run_learner_crawler
 from modules.llm_agent import LLMAgent
+from modules import memory_manager as memory_manager_mod
 from modules.memory_manager import MemoryManager
 from modules.news_crawler import run_news_crawler
 from modules.notifier import Notifier
 from modules import paper_portfolio as paper_portfolio_mod
 from modules.paper_portfolio import PaperPortfolio
+from modules import trade_analytics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,8 +154,11 @@ def validate_decision_hard(
     min_score: float,
     binance: BinanceClient,
     primary_bias: str | None = None,
+    *,
+    closed_trades: list[dict[str, Any]] | None = None,
+    allow_l2_relief: bool = False,
 ) -> tuple[dict[str, Any], str | None]:
-    """Apply Python hard guards (incl. Dow primary bias)."""
+    """Apply Python hard guards (incl. Dow primary bias + profit-first setup gates)."""
     action = str(decision.get("action", "HOLD")).upper()
     if action == "HOLD":
         return decision, None
@@ -181,10 +187,43 @@ def validate_decision_hard(
             return decision, reason
 
     score = float(decision.get("setup_score") or 0)
-    if score < min_score:
+    try:
+        signal_level = int(decision.get("signal_level") or 1)
+    except (TypeError, ValueError):
+        signal_level = 1
+    bias = str(primary_bias or decision.get("primary_bias") or "")
+    setup_tag = trade_analytics.setup_tag_from_decision(decision)
+    trades = list(closed_trades or [])
+
+    # Profit-first: block setups with negative expectancy (enough samples)
+    blocked, block_reason = trade_analytics.should_block_setup(trades, setup_tag)
+    if blocked:
         decision = dict(decision)
         decision["action"] = "HOLD"
-        reason = f"Chặn cứng: điểm {score} < ngưỡng {min_score}"
+        decision["reasoning"] = f"{block_reason}. {decision.get('reasoning', '')}"
+        return decision, block_reason
+
+    req_score = float(min_score)
+    chop_fb = trade_analytics.is_chop_failed_breakout(decision, bias)
+    if chop_fb:
+        req_score = max(req_score, config.BASE_MIN_SCORE + config.ADAPTIVE_CHOP_BONUS)
+        if signal_level < 3 and not allow_l2_relief:
+            decision = dict(decision)
+            decision["action"] = "HOLD"
+            reason = (
+                f"Chặn chop/FB: cần signal_level≥3 (got {signal_level}) "
+                f"tag={setup_tag}"
+            )
+            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+            return decision, reason
+    elif allow_l2_relief:
+        # Zero-trade relief: allow one L2 at base score only if not blocked setup
+        req_score = min(req_score, config.BASE_MIN_SCORE)
+
+    if score < req_score:
+        decision = dict(decision)
+        decision["action"] = "HOLD"
+        reason = f"Chặn cứng: điểm {score} < ngưỡng {req_score}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
@@ -231,17 +270,18 @@ def validate_decision_hard(
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
-    # Minimum R:R 1.5
+    min_rr = trade_analytics.effective_min_rr(decision, bias)
     risk = abs(use_entry - float(sl))
     reward = abs(float(tp) - use_entry)
-    if risk <= 0 or reward / risk < config.MIN_RR:
+    if risk <= 0 or reward / risk < min_rr:
         decision = dict(decision)
         decision["action"] = "HOLD"
-        reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < {config.MIN_RR}"
+        reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < {min_rr}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
     decision["risk_reward_ratio"] = round(reward / risk, 2)
+    decision["setup_tag"] = setup_tag
     return decision, None
 
 
@@ -282,15 +322,53 @@ def validate_manage_hard(
         decision["action"] = "MANAGE_HOLD"
         return decision, None
 
-    if score < config.MANAGE_MIN_SCORE:
+    # CLOSE: allow lower score when underwater near SL / stale / deep loss
+    close_relief = False
+    if action == "CLOSE" and position:
+        side = str(position.get("action") or "").upper()
+        entry = float(position.get("fill_price") or position.get("entry") or 0)
+        sl = float(position.get("stop_loss") or 0)
+        qty = float(position.get("quantity") or 0)
+        initial_sl = float(position.get("initial_stop_loss") or sl)
+        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
+        if side == "BUY":
+            upnl = qty * (mark - entry)
+            risk_left = (mark - sl) if sl else 0.0
+            total_risk = (entry - sl) if entry and sl else 0.0
+        else:
+            upnl = qty * (entry - mark)
+            risk_left = (sl - mark) if sl else 0.0
+            total_risk = (sl - entry) if entry and sl else 0.0
+        near_sl = (
+            total_risk > 0
+            and risk_left >= 0
+            and risk_left <= total_risk * config.MANAGE_NEAR_SL_PCT
+        )
+        hours = trade_analytics.hours_since_iso(position.get("filled_at"))
+        stale = hours is not None and hours >= config.MANAGE_MAX_HOURS
+        deep = False
+        if r_dist > 0 and qty > 0:
+            deep = (upnl / (qty * r_dist)) <= -config.MANAGE_DEEP_LOSS_R
+        if upnl < 0 and (near_sl or stale or deep):
+            # Don't cut healthy pullback: INTACT + not near SL + not deep
+            if thesis == "INTACT" and not deep and not near_sl and not stale:
+                close_relief = False
+            else:
+                close_relief = True
+
+    min_score_needed = config.MANAGE_MIN_SCORE
+    if action == "CLOSE" and close_relief:
+        min_score_needed = config.MANAGE_CLOSE_MIN_SCORE
+
+    if score < min_score_needed:
         decision["manage_action"] = "HOLD"
         decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn manage: điểm {score} < {config.MANAGE_MIN_SCORE}"
+        reason = f"Chặn manage: điểm {score} < {min_score_needed}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
     if action == "CLOSE":
-        if thesis not in {"INVALIDATED", "WEAKENING"}:
+        if thesis not in {"INVALIDATED", "WEAKENING"} and not close_relief:
             decision["manage_action"] = "HOLD"
             decision["action"] = "MANAGE_HOLD"
             reason = f"Chặn CLOSE: thesis_status={thesis} (cần WEAKENING/INVALIDATED)"
@@ -463,6 +541,99 @@ def handle_closed_position(
     )
 
 
+def maybe_run_meta_review(
+    memory: MemoryManager,
+    llm: LLMAgent,
+    notifier: Notifier,
+    paper: PaperPortfolio,
+) -> None:
+    """Run adaptive-rules meta-review every N closes when not yet profitable/stable."""
+    trades = paper.closed_trades()
+    n = len(trades)
+    if n < config.META_REVIEW_EVERY_N_CLOSES:
+        return
+    state = _load_state()
+    last_n = int(state.get("meta_review_at_closes") or 0)
+    if n - last_n < config.META_REVIEW_EVERY_N_CLOSES:
+        # Also allow daily: if last review > 24h ago and expectancy bad
+        last_ts = state.get("meta_review_at")
+        hours = trade_analytics.hours_since_iso(last_ts) if last_ts else None
+        if hours is None or hours < 24:
+            return
+    rules_data = adaptive_rules.load_rules()
+    stats = trade_analytics.summarize_trades(trades)
+    if rules_data.get("stable") and stats.get("stable"):
+        state["meta_review_at_closes"] = n
+        state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
+        _save_state(state)
+        return
+    if rules_data.get("freeze") and stats.get("expectancy", 0) < 0 and stats.get("pnl", 0) < 0:
+        logger.info("meta_review freeze active — skip propose")
+        return
+    # Only review when underperforming
+    need = (
+        stats.get("expectancy", 0) < 0
+        or stats.get("pnl", 0) < 0
+        or stats.get("quality_wr", 0) < config.META_REVIEW_TARGET_QUALITY_WR
+    )
+    if not need and stats.get("stable"):
+        rules_data["stable"] = True
+        adaptive_rules.save_rules(rules_data)
+        notifier.send(
+            f"Meta-review: STABLE mode (exp={stats['expectancy']:+.3f} "
+            f"pnl={stats['pnl']:+.2f} qWR={stats['quality_wr']*100:.0f}%)"
+        )
+        state["meta_review_at_closes"] = n
+        state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
+        _save_state(state)
+        return
+    if not need:
+        return
+
+    stats_txt = trade_analytics.format_stats_for_prompt(trades)
+    proposed = llm.run_meta_review(
+        trades=trades,
+        lessons_summary=memory.get_all_lessons_summary(),
+        current_rules=list(rules_data.get("rules") or []),
+        stats_text=stats_txt,
+    )
+    incoming = adaptive_rules.validate_and_normalize(proposed)
+    if rules_data.get("stable"):
+        # prune-only: keep existing, merge lightly
+        merged = adaptive_rules.merge_rules(list(rules_data.get("rules") or []), incoming[:3])
+    else:
+        merged = adaptive_rules.merge_rules(list(rules_data.get("rules") or []), incoming)
+
+    fail_streak = int(state.get("meta_review_fail_streak") or 0)
+    if stats.get("expectancy", 0) < 0 and stats.get("pnl", 0) < 0:
+        fail_streak += 1
+    else:
+        fail_streak = 0
+    freeze = fail_streak >= 2
+    rules_data.update(
+        {
+            "rules": merged,
+            "stable": bool(stats.get("stable")),
+            "freeze": freeze,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "closes_at_review": n,
+            "last_summary": str(proposed.get("summary") or "")[:400],
+        }
+    )
+    adaptive_rules.save_rules(rules_data)
+    state["meta_review_at_closes"] = n
+    state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
+    state["meta_review_fail_streak"] = fail_streak
+    _save_state(state)
+    notifier.send(
+        "Meta-review adaptive_rules\n"
+        f"n={n} exp={stats['expectancy']:+.3f} pnl={stats['pnl']:+.2f} "
+        f"qWR={stats['quality_wr']*100:.0f}% rules={len(merged)} "
+        f"stable={rules_data['stable']} freeze={freeze}\n"
+        f"{(proposed.get('summary') or '')[:300]}"
+    )
+
+
 def _paper_status_text(paper: PaperPortfolio) -> str:
     s = paper.summary()
     return (
@@ -484,6 +655,7 @@ def handle_paper_closed(
     pnl = float(closed_event.get("pnl", 0))
     filled_at = trade.get("opened_at") or trade.get("filled_at") or ""
     candles = _post_mortem_candles(binance, filled_at)
+    close_reason = str(closed_event.get("reason") or trade.get("reason") or "")
     lesson = llm.run_post_mortem(
         action=trade.get("action", ""),
         entry=float(trade.get("entry") or 0),
@@ -499,15 +671,24 @@ def handle_paper_closed(
             if trade.get("exit") is not None
             else None
         ),
-        close_reason=str(closed_event.get("reason") or trade.get("reason") or ""),
+        close_reason=close_reason,
         filled_at=str(filled_at or ""),
     )
+    setup_tag = str(
+        trade.get("setup_tag")
+        or trade_analytics.setup_tag_from_trade(trade)
+    )
+    r_mult = trade_analytics.r_multiple_of_trade(trade)
     memory.add_lesson(
         regime=lesson.get("regime", trade.get("regime", "REGIME_SIDEWAY_CHOP")),
         mistake_or_insight=lesson.get("mistake_or_insight", ""),
         actionable_rule=lesson.get("actionable_rule", ""),
         weight=int(lesson.get("weight", 1) or 1),
         classification=str(lesson.get("classification") or ""),
+        setup_tag=setup_tag,
+        close_reason=close_reason,
+        pnl=pnl,
+        r_multiple=r_mult,
     )
     stats = memory.record_closed_trade(result)
     notifier.notify_post_mortem(lesson, result, pnl)
@@ -518,6 +699,10 @@ def handle_paper_closed(
         f"{_paper_status_text(PaperPortfolio())}\n"
         f"điểm tối thiểu (memory)={stats.get('current_min_score')}"
     )
+    try:
+        maybe_run_meta_review(memory, llm, notifier, PaperPortfolio())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("meta_review after close skipped: %s", exc)
 
 
 def job_trade(
@@ -604,6 +789,9 @@ def job_trade(
                     )
                 return
 
+            closed = paper.closed_trades()
+            stats_txt = trade_analytics.format_stats_for_prompt(closed)
+            rules_txt = adaptive_rules.format_for_prompt()
             manage = llm.get_manage_decision(
                 candles_4h=candles_4h,
                 candles_1h=candles_1h,
@@ -612,6 +800,8 @@ def job_trade(
                 position=pos,
                 pending=pending if not pos else None,
                 manage_min_score=config.MANAGE_MIN_SCORE,
+                trade_stats=stats_txt,
+                adaptive_rules=rules_txt,
             )
             manage, reject = validate_manage_hard(
                 manage,
@@ -692,6 +882,17 @@ def job_trade(
         hist_txt = decision_history.format_for_prompt(
             decision_history.load_recent(config.DECISION_HISTORY_MAX)
         )
+        closed = paper.closed_trades()
+        stats_txt = trade_analytics.format_stats_for_prompt(closed)
+        rules_txt = adaptive_rules.format_for_prompt()
+        # Zero-trade relief: if idle too long, allow one L2 at base score
+        last_closed = closed[-1] if closed else None
+        idle_h = trade_analytics.hours_since_iso(
+            (last_closed or {}).get("closed_at") or state.get("last_entry_at")
+        )
+        allow_l2_relief = bool(
+            idle_h is not None and idle_h >= config.ZERO_TRADE_HOURS
+        )
         decision = llm.get_decision(
             candles_4h=candles_4h,
             candles_1h=candles_1h,
@@ -701,18 +902,24 @@ def job_trade(
             memory_lessons=memory.get_all_lessons_summary(),
             min_score_required=min_score,
             decision_history=hist_txt,
+            trade_stats=stats_txt,
+            adaptive_rules=rules_txt,
         )
         decision, reject = validate_decision_hard(
             decision,
             min_score,
             binance,
             primary_bias=str(decision.get("primary_bias") or ""),
+            closed_trades=closed,
+            allow_l2_relief=allow_l2_relief,
         )
         extra = (
             f"điểm tối thiểu={min_score} | primary={decision.get('primary_bias')} | "
             f"bars 1D={len(candles_1d)} 4H={len(candles_4h)} 1H={len(candles_1h)} | "
             f"{_paper_status_text(paper)}"
         )
+        if allow_l2_relief:
+            extra += " | zero-trade relief ON"
         if reject:
             extra += f" | bị chặn: {reject}"
         state["last_decision"] = decision
@@ -743,7 +950,14 @@ def job_trade(
                 win_probability=decision.get("win_probability"),
                 trigger=str(decision.get("trigger") or ""),
                 invalidation=str(decision.get("invalidation") or ""),
+                setup_tag=str(
+                    decision.get("setup_tag")
+                    or trade_analytics.setup_tag_from_decision(decision)
+                ),
             )
+            if placed.get("ok"):
+                state["last_entry_at"] = datetime.now(timezone.utc).isoformat()
+                _save_state(state)
             if not placed.get("ok"):
                 notifier.send(f"PAPER từ chối: {placed.get('reason')}")
             else:
@@ -829,12 +1043,15 @@ def job_trade(
         memory_lessons=lessons,
         min_score_required=min_score,
         decision_history=hist_txt,
+        trade_stats="(live mode — paper TRADE_STATS không áp dụng)",
+        adaptive_rules=adaptive_rules.format_for_prompt(),
     )
     decision, reject = validate_decision_hard(
         decision,
         min_score,
         binance,
         primary_bias=str(decision.get("primary_bias") or ""),
+        closed_trades=[],
     )
     extra = (
         f"điểm tối thiểu={min_score} | primary={decision.get('primary_bias')} | "
@@ -954,6 +1171,16 @@ def main() -> None:
             logger.info("Restored paper_account from remote")
     except Exception as exc:  # noqa: BLE001
         logger.warning("paper_account restore skipped: %s", exc)
+    try:
+        if memory_manager_mod.ensure_restored():
+            logger.info("Restored memory.json from remote")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory restore skipped: %s", exc)
+    try:
+        if adaptive_rules.restore_from_remote():
+            logger.info("Restored adaptive_rules from remote")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("adaptive_rules restore skipped: %s", exc)
     memory = MemoryManager()
     llm = LLMAgent()
     notifier = Notifier()
