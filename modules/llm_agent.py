@@ -34,11 +34,22 @@ DỮ LIỆU:
 {regime_memory_lessons}
 ---
 
-2b. LỊCH SỬ QUYẾT ĐỊNH (mới nhất ở dưới)
+2a. TRADE_STATS (paper — ưu tiên expectancy/PnL, không săn WR ảo)
+---
+{trade_stats}
+---
+
+2b. ADAPTIVE RULES (từ meta-review; không được bỏ qua nếu khớp WHEN)
+---
+{adaptive_rules}
+---
+
+2c. LỊCH SỬ QUYẾT ĐỊNH (mới nhất ở dưới)
 ---
 {decision_history}
 ---
 Chỉ tham khảo. Số liệu live + trade_flags luôn ưu tiên hơn history.
+Nếu TRADE_STATS cho setup đang expectancy âm → ưu tiên HOLD hoặc chỉ L3.
 
 3. CẤU TRÚC THỊ TRƯỜNG
 
@@ -149,6 +160,16 @@ trigger={entry_trigger}
 invalidation={entry_invalidation}
 reasoning={entry_reasoning}
 
+TRADE_STATS:
+---
+{trade_stats}
+---
+
+ADAPTIVE RULES:
+---
+{adaptive_rules}
+---
+
 HÀNH ĐỘNG CHO PHÉP: {allowed_actions}
 Ngưỡng manage_score tham chiếu: {manage_min_score}
 
@@ -160,9 +181,12 @@ QUY TẮC ĐÁNH GIÁ:
 
 2. manage_action:
 - HOLD: thesis còn hiệu lực hoặc chưa đủ bằng chứng để đóng/trailing.
-- CLOSE: chỉ khi đang có position, thesis INVALIDATED hoặc có bằng chứng mạnh cho thấy edge đã mất. Nêu rõ bằng chứng.
+- CLOSE: khi thesis INVALIDATED/WEAKENING, hoặc đã lỗ sâu gần SL mà không có PA xác nhận mới.
+  Không HOLD “chờ invalidation xa” khi uPnL âm sâu và không có xác nhận mới.
+  Không cắt non chỉ vì 1–2 nến đỏ nếu thesis INTACT và còn xa SL.
 - CANCEL_PENDING: chỉ khi đang pending và setup không còn hợp lệ trước khi khớp.
 - TRAIL: chỉ khi đang có position, có lãi thực tế và cấu trúc giá hỗ trợ khóa lợi nhuận.
+  Cấm trail BE chỉ để tăng WR ảo.
 
 3. Quy tắc TRAIL:
 - SELL: new_stop_loss phải thấp hơn SL hiện tại, vẫn CAO HƠN giá mark hiện tại.
@@ -514,6 +538,8 @@ def _build_manage_prompt(
     position: dict[str, Any] | None,
     pending: dict[str, Any] | None,
     manage_min_score: float,
+    trade_stats: str = "",
+    adaptive_rules: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Build compact manage prompt (no core playbook / history)."""
     from modules.market_structure import build_multi_tf_structure
@@ -521,6 +547,8 @@ def _build_manage_prompt(
     struct_1w, struct_1d, struct_4h, struct_1h, meta = build_multi_tf_structure(
         candles_1d, candles_4h, candles_1h
     )
+    stats_txt = (trade_stats or "").strip() or "(không có TRADE_STATS)"
+    rules_txt = (adaptive_rules or "").strip() or "(không có adaptive_rules)"
     near_s = meta.get("nearest_support")
     near_r = meta.get("nearest_resistance")
     align = (
@@ -587,6 +615,8 @@ def _build_manage_prompt(
         entry_trigger=str(thesis.get("trigger") or ""),
         entry_invalidation=str(thesis.get("invalidation") or ""),
         entry_reasoning=str(thesis.get("reasoning") or "")[:500],
+        trade_stats=stats_txt[: config.TRADE_STATS_MAX_CHARS],
+        adaptive_rules=rules_txt[:700],
         allowed_actions=allowed,
         manage_min_score=manage_min_score,
     )
@@ -613,6 +643,8 @@ def _build_manage_prompt(
             entry_trigger=str(thesis.get("trigger") or "")[:200],
             entry_invalidation=str(thesis.get("invalidation") or "")[:200],
             entry_reasoning=str(thesis.get("reasoning") or "")[:240],
+            trade_stats=stats_txt[:400],
+            adaptive_rules=rules_txt[:400],
             allowed_actions=allowed,
             manage_min_score=manage_min_score,
         )
@@ -630,6 +662,8 @@ def _build_decision_prompt(
     current_price: float,
     current_position: dict[str, Any] | None,
     min_score_required: float,
+    trade_stats: str = "",
+    adaptive_rules: str = "",
 ) -> str:
     """
     Wide view = structure FULL fetch.
@@ -698,6 +732,8 @@ def _build_decision_prompt(
     hist_txt = _join_hist(hist_lines)
     trade_flags_txt = str(meta.get("trade_flags_text") or "(không có trade_flags)")
     min_rr = config.MIN_RR
+    stats_txt = (trade_stats or "").strip() or "(chưa có TRADE_STATS)"
+    rules_txt = (adaptive_rules or "").strip() or "(chưa có adaptive_rules)"
 
     def _assemble(
         m_budget: int,
@@ -705,10 +741,16 @@ def _build_decision_prompt(
         n4: int = 0,
         with_vol: bool = False,
         hist: str | None = None,
+        stats_budget: int | None = None,
+        rules_budget: int | None = None,
     ) -> str:
+        sb = config.TRADE_STATS_MAX_CHARS if stats_budget is None else stats_budget
+        rb = 700 if rules_budget is None else rules_budget
         return LLM_DECISION_PROMPT.format(
             core_playbook_content=core_txt,
             regime_memory_lessons=(memory_lessons or "")[:m_budget] or "(chưa có bài học)",
+            trade_stats=stats_txt[:sb],
+            adaptive_rules=rules_txt[:rb],
             decision_history=hist if hist is not None else hist_txt,
             structure_1w=struct_1w,
             structure_1d=struct_1d,
@@ -961,6 +1003,8 @@ class LLMAgent:
         min_score_required: float,
         candles_1d: list[dict[str, Any]] | None = None,
         decision_history: str = "",
+        trade_stats: str = "",
+        adaptive_rules: str = "",
     ) -> dict[str, Any]:
         core = _read_text(config.PATHS["CORE_PLAYBOOK"])
         candles_1d = candles_1d or []
@@ -983,6 +1027,8 @@ class LLMAgent:
             current_price=current_price,
             current_position=current_position,
             min_score_required=min_score_required,
+            trade_stats=trade_stats,
+            adaptive_rules=adaptive_rules,
         )
         logger.info(
             "Decision prompt chars=%d core=%d hist=%d 1D=%d 4H=%d 1H=%d primary=%s",
@@ -997,9 +1043,10 @@ class LLMAgent:
 
         system = (
             "Bạn là Senior Crypto Quant Trader. Trả về 1 JSON hợp lệ, không markdown. "
-            "Mục tiêu: tìm cơ hội có edge và vào lệnh khi hợp lý — không quá an toàn. "
-            "Dow/PA là nền tảng, không phải luật cứng. RANGE có thể trade ở biên. "
-            "Failed breakout/sweep là trigger hợp lệ. "
+            "Mục tiêu: expectancy/PnL dương — không săn WR ảo bằng trail BE. "
+            "Tôn trọng TRADE_STATS và ADAPTIVE RULES. "
+            "Dow/PA là nền tảng. RANGE có thể trade ở biên nếu edge rõ. "
+            "Failed breakout/sweep chỉ trade khi đủ xác nhận (ưu tiên L3 nếu stats kém). "
             "Đối chiếu trade_flags trước khi kết luận breakout/breakdown. "
             "setup_score 0–10, win_probability 0–1, signal_level 1–3. "
             "BUY/SELL cần SL/TP hợp lý. Text tiếng Việt."
@@ -1112,6 +1159,8 @@ class LLMAgent:
         pending: dict[str, Any] | None = None,
         candles_1d: list[dict[str, Any]] | None = None,
         manage_min_score: float | None = None,
+        trade_stats: str = "",
+        adaptive_rules: str = "",
     ) -> dict[str, Any]:
         """LLM manage-mode for open paper position / pending."""
         candles_1d = candles_1d or []
@@ -1128,6 +1177,8 @@ class LLMAgent:
             position=position,
             pending=pending,
             manage_min_score=min_score,
+            trade_stats=trade_stats,
+            adaptive_rules=adaptive_rules,
         )
         logger.info(
             "Manage prompt chars=%d primary=%s exposure=%s",
@@ -1201,6 +1252,53 @@ class LLMAgent:
             "state": thesis,
             "signal_level": 0,
         }
+
+    def run_meta_review(
+        self,
+        trades: list[dict[str, Any]],
+        lessons_summary: str,
+        current_rules: list[dict[str, Any]],
+        stats_text: str,
+    ) -> dict[str, Any]:
+        """Propose adaptive_rules focused on expectancy/PnL (not raw WR)."""
+        slim_trades = []
+        for t in trades[-config.META_REVIEW_ROLLING_N :]:
+            slim_trades.append(
+                {
+                    "action": t.get("action"),
+                    "result": t.get("result"),
+                    "reason": t.get("reason"),
+                    "pnl": t.get("pnl"),
+                    "setup_tag": t.get("setup_tag") or t.get("regime"),
+                    "signal_level": t.get("signal_level"),
+                }
+            )
+        prompt = (
+            "Bạn là Risk Officer tối ưu LỢI NHUẬN paper BTC.\n"
+            "Mục tiêu: expectancy/PnL dương. CẤM đề xuất trail BE chỉ để tăng WR.\n"
+            "Dựa trên TRADE_STATS + recent trades + lessons, đề xuất ≤8 adaptive rules.\n"
+            "Mỗi rule: when (điều kiện), action (HOLD/chỉ L3/RR≥x/...), reason, "
+            "evidence_n, weight 1–3.\n"
+            "Trả về 1 JSON: {\"rules\":[...], \"summary\":\"...\"}. Không markdown.\n\n"
+            f"TRADE_STATS:\n{stats_text}\n\n"
+            f"LESSONS:\n{lessons_summary or '(không có)'}\n\n"
+            f"CURRENT_RULES:\n{json.dumps(current_rules, ensure_ascii=False)}\n\n"
+            f"RECENT_TRADES:\n{json.dumps(slim_trades, ensure_ascii=False)}"
+        )
+        try:
+            raw = self._chat(
+                system=(
+                    "Return only JSON with rules array. "
+                    "Prioritize expectancy and PnL. Vietnamese reason text."
+                ),
+                user=prompt,
+                temperature=0.2,
+            )
+            data = extract_json_object(raw)
+            return data if isinstance(data, dict) else {"rules": [], "summary": ""}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("meta_review failed: %s", exc)
+            return {"rules": [], "summary": f"meta_review error: {exc}"}
 
     def run_post_mortem(
         self,
