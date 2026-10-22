@@ -195,7 +195,7 @@ def validate_decision_hard(
     setup_tag = trade_analytics.setup_tag_from_decision(decision)
     trades = list(closed_trades or [])
 
-    # Profit-first: block setups with negative expectancy (enough samples)
+    # Opportunity-first: hard-block chỉ khi SETUP_BLOCK_HARD=true
     blocked, block_reason = trade_analytics.should_block_setup(trades, setup_tag)
     if blocked:
         decision = dict(decision)
@@ -203,11 +203,29 @@ def validate_decision_hard(
         decision["reasoning"] = f"{block_reason}. {decision.get('reasoning', '')}"
         return decision, block_reason
 
+    # L1 = quan sát; BUY/SELL tối thiểu L2 (trừ zero-trade relief)
+    min_lvl = int(getattr(config, "ENTRY_MIN_SIGNAL_LEVEL", 2) or 2)
+    if signal_level < min_lvl and not allow_l2_relief:
+        decision = dict(decision)
+        decision["action"] = "HOLD"
+        reason = f"Chặn: signal_level {signal_level} < {min_lvl} (L1 chỉ quan sát)"
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
+
     req_score = float(min_score)
+    soft_pen, soft_note = trade_analytics.setup_score_penalty(trades, setup_tag)
+    if soft_pen > 0:
+        req_score += soft_pen
+
     chop_fb = trade_analytics.is_chop_failed_breakout(decision, bias)
     if chop_fb:
         req_score = max(req_score, config.BASE_MIN_SCORE + config.ADAPTIVE_CHOP_BONUS)
-        if signal_level < 3 and not allow_l2_relief:
+        # Mặc định KHÔNG bắt L3 — vẫn cho L2 vào lệnh để học mẫu
+        if (
+            getattr(config, "CHOP_REQUIRE_L3", False)
+            and signal_level < 3
+            and not allow_l2_relief
+        ):
             decision = dict(decision)
             decision["action"] = "HOLD"
             reason = (
@@ -216,9 +234,13 @@ def validate_decision_hard(
             )
             decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
             return decision, reason
-    elif allow_l2_relief:
-        # Zero-trade relief: allow one L2 at base score only if not blocked setup
+    if allow_l2_relief:
+        # Idle quá lâu: nới về BASE để không đứng ngoài mãi
         req_score = min(req_score, config.BASE_MIN_SCORE)
+
+    if soft_note:
+        decision = dict(decision)
+        decision["reasoning"] = f"{soft_note}. {decision.get('reasoning', '')}"
 
     if score < req_score:
         decision = dict(decision)
