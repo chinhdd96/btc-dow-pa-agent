@@ -201,9 +201,11 @@ def setup_expectancy(trades: list[dict[str, Any]], setup_tag: str) -> dict[str, 
 
 
 def should_block_setup(trades: list[dict[str, Any]], setup_tag: str) -> tuple[bool, str]:
-    """Block setup when enough samples and expectancy < 0."""
+    """Hard-block only when SETUP_BLOCK_HARD=true and expectancy < 0."""
     tag = setup_tag.upper()
     if tag in {"UNKNOWN", ""}:
+        return False, ""
+    if not getattr(config, "SETUP_BLOCK_HARD", False):
         return False, ""
     stats = setup_expectancy(trades, tag)
     if stats["n"] < config.SETUP_BLOCK_MIN_TRADES:
@@ -217,6 +219,27 @@ def should_block_setup(trades: list[dict[str, Any]], setup_tag: str) -> tuple[bo
             ),
         )
     return False, ""
+
+
+def setup_score_penalty(trades: list[dict[str, Any]], setup_tag: str) -> tuple[float, str]:
+    """
+    Soft gate: expectancy âm + đủ mẫu → nâng ngưỡng điểm, KHÔNG cấm vào lệnh.
+    Trả (penalty_score, note).
+    """
+    tag = setup_tag.upper()
+    if tag in {"UNKNOWN", ""}:
+        return 0.0, ""
+    stats = setup_expectancy(trades, tag)
+    if stats["n"] < config.SETUP_BLOCK_MIN_TRADES:
+        return 0.0, ""
+    if stats["expectancy"] < 0:
+        pen = float(getattr(config, "SETUP_SOFT_PENALTY", 0.5) or 0.5)
+        note = (
+            f"Soft: {tag} exp={stats['expectancy']:.3f} "
+            f"pnl={stats['pnl']:+.2f} n={stats['n']} → +{pen:.1f} điểm"
+        )
+        return pen, note
+    return 0.0, ""
 
 
 def is_chop_failed_breakout(decision: dict[str, Any], primary_bias: str = "") -> bool:
@@ -255,7 +278,11 @@ def format_stats_for_prompt(
             f"(≥{config.QUALITY_WIN_MIN_R}R/TP) | TP-like={s['tp_ratio']*100:.0f}% | "
             f"avgW={s['avg_win']:+.2f} avgL=-{s['avg_loss']:.2f}"
         ),
-        f"stable_mode={'YES' if s['stable'] else 'NO'} — ưu tiên expectancy/PnL, không săn WR ảo.",
+        (
+            f"stable_mode={'YES' if s['stable'] else 'NO'} — "
+            "ưu tiên expectancy/PnL; setup âm → tìm setup khác, "
+            "vẫn được trade L2+ (không đứng ngoài mãi)."
+        ),
     ]
     setups = sorted(
         s["by_setup"].items(),
