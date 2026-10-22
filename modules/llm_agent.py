@@ -107,7 +107,7 @@ DỮ LIỆU:
 
 Chỉ tham khảo. Số liệu live + trade_flags luôn ưu tiên hơn history.
 
-Nếu TRADE_STATS cho thấy setup có expectancy âm với mẫu đủ tin cậy → giảm ưu tiên setup đó, chủ động tìm setup/khung khác; không tự động HOLD toàn thị trường. Nếu mẫu ít, coi đây là giả thuyết cần kiểm chứng.
+Nếu TRADE_STATS cho thấy setup có expectancy âm → ưu tiên tìm setup/khung khác (continuation, pullback, breakout thật, retest…), nhưng KHÔNG được đứng ngoài toàn thị trường. Vẫn được đề xuất L2+ nếu có trigger, invalidation, TP thực tế và R:R hợp lệ — hệ thống Python chỉ nâng ngưỡng điểm (soft), không cấm cứng. Mục tiêu: vào lệnh có chất lượng để học, không HOLD kéo dài.
 
 
 
@@ -2099,13 +2099,15 @@ class LLMAgent:
 
             "Bạn là Senior Crypto Quant Trader. Trả về 1 JSON hợp lệ, không markdown. "
 
-            "Mục tiêu: expectancy/PnL dương — không săn WR ảo bằng trail BE. "
+            "Mục tiêu: expectancy/PnL dương trên mọi khung — không săn WR ảo bằng trail BE. "
 
-            "Tôn trọng TRADE_STATS và ADAPTIVE RULES. "
+            "Săn cơ hội vào lệnh có chất lượng (L2+) để học; CẤM đứng ngoài mãi vì 1 setup xấu. "
 
-            "Dow/PA là nền tảng. RANGE có thể trade ở biên nếu edge rõ. "
+            "Tôn trọng TRADE_STATS và ADAPTIVE RULES: setup expectancy âm → đổi setup/TF, không HOLD toàn thị trường. "
 
-            "Failed breakout/sweep chỉ trade khi đủ xác nhận (ưu tiên L3 nếu stats kém). "
+            "Dow/PA là nền tảng. RANGE trade ở biên hoặc TF nhỏ nếu có trigger+invalidation+R:R. "
+
+            "Failed breakout/sweep: L2+ đủ khi có xác nhận; L3 khi edge rất rõ. "
 
             "Đối chiếu trade_flags trước khi kết luận breakout/breakdown. "
 
