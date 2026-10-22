@@ -20,6 +20,18 @@
         "close_reason": "SL",
         "last_pnl": 0.1438,
         "last_r": 1.0002488333333335
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Stop loss được đặt ở mức 82230, thấp hơn mức vào lệnh 82850, trái hướng với quy tắc dừng lỗ cho vị thế bán (stop loss phải ở mức giá cao hơn mức vào lệnh). Điều này cho thấy lỗi trong việc xác định và triển khai mức dừng lỗ, dù giao dịch vẫn kết thúc có lợi nhuận do giá tiếp tục giảm.",
+        "actionable_rule": "Khi vào lệnh bán, luôn đặt stop loss trên mức vào lệnh (giá cao hơn) và kiểm tra lại mức SL trước khi gửi lệnh để tránh nhầm lẫn giữa stop loss và take profit.",
+        "weight": 3,
+        "evidence_n": 1,
+        "classification": "PROCESS_ERROR",
+        "setup_tag": "BREAKDOWN",
+        "close_reason": "SL",
+        "last_pnl": 2.245,
+        "last_r": 0.7469808000979561
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
