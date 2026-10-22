@@ -70,9 +70,26 @@ ADAPTIVE_RULES_GITHUB_PATH = os.getenv(
     "ADAPTIVE_RULES_GITHUB_PATH", "generated/adaptive_rules.json"
 ).strip()
 
-# Self-improve / profit-first learning loop
-ADAPTIVE_CHOP_BONUS = float(os.getenv("ADAPTIVE_CHOP_BONUS", "1.5"))
-CHOP_MIN_RR = float(os.getenv("CHOP_MIN_RR", "1.5"))
+# Self-improve / opportunity-first learning loop
+# Default: KHÔNG chặn cứng setup (đứng ngoài mãi = không học được).
+# Expectancy âm → chỉ nâng ngưỡng điểm (soft), vẫn cho vào lệnh nếu đạt.
+SETUP_BLOCK_HARD = os.getenv("SETUP_BLOCK_HARD", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SETUP_SOFT_PENALTY = float(os.getenv("SETUP_SOFT_PENALTY", "0.5"))
+ADAPTIVE_CHOP_BONUS = float(os.getenv("ADAPTIVE_CHOP_BONUS", "0.5"))
+CHOP_MIN_RR = float(os.getenv("CHOP_MIN_RR", "1.2"))
+CHOP_REQUIRE_L3 = os.getenv("CHOP_REQUIRE_L3", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# L1 = quan sát; BUY/SELL tối thiểu L2 để vẫn có chất lượng mẫu
+ENTRY_MIN_SIGNAL_LEVEL = int(os.getenv("ENTRY_MIN_SIGNAL_LEVEL", "2"))
 QUALITY_WIN_MIN_R = float(os.getenv("QUALITY_WIN_MIN_R", "0.3"))
 SETUP_BLOCK_MIN_TRADES = int(os.getenv("SETUP_BLOCK_MIN_TRADES", "8"))
 META_REVIEW_EVERY_N_CLOSES = int(os.getenv("META_REVIEW_EVERY_N_CLOSES", "10"))
@@ -85,7 +102,8 @@ MANAGE_NEAR_SL_PCT = float(os.getenv("MANAGE_NEAR_SL_PCT", "0.35"))
 MANAGE_MAX_HOURS = float(os.getenv("MANAGE_MAX_HOURS", "18"))
 MANAGE_DEEP_LOSS_R = float(os.getenv("MANAGE_DEEP_LOSS_R", "0.5"))
 MANAGE_CLOSE_MIN_SCORE = float(os.getenv("MANAGE_CLOSE_MIN_SCORE", "4.5"))
-ZERO_TRADE_HOURS = float(os.getenv("ZERO_TRADE_HOURS", "48"))
+# Idle quá lâu → nới nhẹ để không đứng ngoài mãi
+ZERO_TRADE_HOURS = float(os.getenv("ZERO_TRADE_HOURS", "12"))
 TRADE_STATS_MAX_CHARS = int(os.getenv("TRADE_STATS_MAX_CHARS", "600"))
 ADAPTIVE_RULES_MAX = int(os.getenv("ADAPTIVE_RULES_MAX", "12"))
 
