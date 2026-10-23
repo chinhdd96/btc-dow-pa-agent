@@ -1,8 +1,8 @@
 {
   "version": 1,
   "stable": false,
-  "updated_at": "2026-10-23T03:05:15.440891+00:00",
-  "closes_at_review": 19,
+  "updated_at": "2026-10-23T23:05:15.668222+00:00",
+  "closes_at_review": 20,
   "freeze": false,
   "rules": [
     {
@@ -15,6 +15,14 @@
     },
     {
       "id": "r1",
+      "when": "action == 'SELL' && stop_loss <= entry_price",
+      "action": "SET stop loss above entry price (giá SL  giá vào lệnh)",
+      "reason": "Ngăn lỗi đặt SL dưới mức vào lệnh, giảm mức lỗ lớn và bảo vệ rủi ro như đã nêu trong LESSONS",
+      "evidence_n": 2,
+      "weight": 3
+    },
+    {
+      "id": "r1",
       "when": "setup_tag == 'FAILED_BREAKOUT'",
       "action": "ENTER only if at least one bearish confirmation signal is present (e.g., decreasing volume, lower high, bearish candle)",
       "reason": "Giảm tần suất giao dịch có kỳ vọng âm bằng cách thêm xác nhận xu hướng giảm",
@@ -22,18 +30,50 @@
       "weight": 3
     },
     {
-      "id": "r3",
-      "when": "action == 'BUY' && setup_tag == 'FAILED_BREAKOUT'",
-      "action": "SKIP entry (HOLD)",
-      "reason": "BUY trên FAILED_BREAKOUT đã gây 2 lỗ liên tiếp trong các giao dịch gần đây",
+      "id": "r2",
+      "when": "setup_tag == 'FAILED_BREAKOUT' && bearish_confirmation_present && calculated_RR = 2.0",
+      "action": "ENTER SELL",
+      "reason": "Thêm ít nhất một tín hiệu xác nhận xu hướng giảm và yêu cầu RR ≥ 2 để cải thiện expectancy âm của FAILED_BREAKOUT",
       "evidence_n": 1,
-      "weight": 2
+      "weight": 3
     },
     {
       "id": "r4",
       "when": "calculated_RR < 1.5",
       "action": "DO NOT ENTER (SKIP)",
-      "reason": "Reward‑to‑Risk thấp làm giảm expectancy; cần RR ≥ 1.5 để đạt lợi nhuận kỳ vọng",
+      "reason": "Reward‑to‑Risk thấp làm giảm expectancy, cần RR ≥ 1.5 để đạt lợi nhuận kỳ vọng",
+      "evidence_n": 2,
+      "weight": 2
+    },
+    {
+      "id": "r8",
+      "when": "rolling_expectancy_19 < 0",
+      "action": "REDUCE position size by 30% for next 10 trades",
+      "reason": "Kỳ vọng âm, giảm rủi ro và bảo vệ vốn để cải thiện PnL dài hạn",
+      "evidence_n": 2,
+      "weight": 2
+    },
+    {
+      "id": "r3",
+      "when": "action == 'BUY' && setup_tag == 'FAILED_BREAKOUT'",
+      "action": "SKIP (HOLD)",
+      "reason": "BUY trên FAILED_BREAKOUT đã gây 2 lỗ liên tiếp trong các giao dịch gần đây, không sinh lợi",
+      "evidence_n": 2,
+      "weight": 2
+    },
+    {
+      "id": "r4",
+      "when": "setup_tag == 'BREAKDOWN' && price < support && volume_surge && calculated_RR = 1.5",
+      "action": "ENTER SELL",
+      "reason": "Duy trì expectancy cao (+1.308) của BREAKDOWN bằng cách xác nhận phá vỡ thực sự và RR đủ",
+      "evidence_n": 2,
+      "weight": 2
+    },
+    {
+      "id": "r3",
+      "when": "action == 'BUY' && setup_tag == 'FAILED_BREAKOUT'",
+      "action": "SKIP entry (HOLD)",
+      "reason": "BUY trên FAILED_BREAKOUT đã gây 2 lỗ liên tiếp trong các giao dịch gần đây",
       "evidence_n": 1,
       "weight": 2
     },
@@ -46,19 +86,11 @@
       "weight": 2
     },
     {
-      "id": "r8",
-      "when": "rolling_expectancy_19 < 0",
-      "action": "REDUCE position size by 30% for next 10 trades",
-      "reason": "Giảm rủi ro khi kỳ vọng âm, bảo vệ vốn và cải thiện PnL dài hạn",
-      "evidence_n": 1,
-      "weight": 2
-    },
-    {
       "id": "r5",
       "when": "consecutive_losses_on('FAILED_BREAKOUT') = 3",
       "action": "PAUSE FAILED_BREAKOUT setup for next 5 trades",
-      "reason": "Ngăn chặn chuỗi thua lỗ kéo dài khi expectancy âm",
-      "evidence_n": 1,
+      "reason": "Ngăn chặn chuỗi thua lỗ kéo dài khi expectancy âm của FAILED_BREAKOUT",
+      "evidence_n": 2,
       "weight": 1
     },
     {
@@ -70,5 +102,5 @@
       "weight": 1
     }
   ],
-  "last_summary": "Các quy tắc trên tập trung vào việc lọc các tín hiệu FAILED_BREAKOUT yếu, đảm bảo đặt SL đúng phía trên khi bán, tránh mua trong môi trường giảm, và chỉ vào lệnh khi có RR đủ cao. Đồng thời, chúng giới hạn chuỗi thua lỗ, sử dụng trailing stop sau khi đạt 1R lợi nhuận, và điều chỉnh kích thước vị thế khi expectancy âm. Những biện pháp này nhằm nâng cao expectancy và PnL dài hạn mà không chỉ tăng WR"
+  "last_summary": "Các quy tắc mới tập trung vào việc cải thiện expectancy và PnL bằng cách (1) chắc chắn đặt SL đúng phía trên mức vào lệnh cho lệnh bán, (2) yêu cầu xác nhận xu hướng giảm và RR ≥ 2 cho FAILED_BREAKOUT, (3) loại bỏ BUY trên FAILED_BREAKOUT, (4) chỉ vào lệnh BREAKDOWN khi có xác nhận phá vỡ và RR đủ, (5) lọc bỏ mọi giao dịch có RR < 1.5, (6) giảm kích thước vị thế khi kỳ vọng vòng 20 âm, (7) kích ho"
 }
