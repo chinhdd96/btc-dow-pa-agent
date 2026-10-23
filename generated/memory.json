@@ -32,6 +32,18 @@
         "close_reason": "SL",
         "last_pnl": 2.245,
         "last_r": 0.7469808000979561
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Setup đáp ứng các tiêu chuẩn R:R ≥ 1.2 và vị trí SL/TP hợp lý, nhưng mẫu FAILED_BREAKOUT có kỳ vọng âm trong lịch sử, nên khả năng thua cao.",
+        "actionable_rule": "Khi áp dụng mẫu FAILED_BREAKOUT, cần bổ sung ít nhất một tín hiệu xác nhận xu hướng giảm (ví dụ: giảm khối lượng, mô hình nến giảm tiếp theo) trước khi vào lệnh để giảm tần suất giao dịch với kỳ vọng âm.",
+        "weight": 1,
+        "evidence_n": 1,
+        "classification": "VALID_LOSS",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": -2.2167,
+        "last_r": -0.9999778955578642
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
