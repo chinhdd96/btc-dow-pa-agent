@@ -44,6 +44,18 @@
         "close_reason": "SL",
         "last_pnl": -2.2167,
         "last_r": -0.9999778955578642
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Setup bán dựa trên tín hiệu phá thất bại mức kháng cự kèm nến giảm đã được thực hiện đúng, SL đặt trên mức vào lệnh và TP dựa trên mức hỗ trợ gần nhất, dẫn đến thắng giao dịch.",
+        "actionable_rule": "Khi giá thử phá mức kháng cự nhưng không duy trì và xuất hiện nến giảm xác nhận, mở lệnh bán với SL trên mức vào lệnh và TP ở mức hỗ trợ gần nhất, đảm bảo R:R ≥1.5.",
+        "weight": 1,
+        "evidence_n": 1,
+        "classification": "VALID_WIN",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "TP",
+        "last_pnl": 3.2532,
+        "last_r": 1.8667959705393753
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
