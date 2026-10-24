@@ -1,10 +1,18 @@
 {
   "version": 1,
   "stable": false,
-  "updated_at": "2026-10-23T23:05:15.668222+00:00",
-  "closes_at_review": 20,
+  "updated_at": "2026-10-24T17:05:17.851484+00:00",
+  "closes_at_review": 21,
   "freeze": false,
   "rules": [
+    {
+      "id": "r4",
+      "when": "setup_tag == 'BREAKDOWN' && price < support && volume_surge && calculated_RR = 1.5",
+      "action": "ENTER SELL",
+      "reason": "Duy trì expectancy cao (+1.308) của BREAKDOWN bằng xác nhận phá vỡ thực sự và RR đủ",
+      "evidence_n": 4,
+      "weight": 3
+    },
     {
       "id": "r2",
       "when": "action == 'SELL'",
@@ -18,6 +26,22 @@
       "when": "action == 'SELL' && stop_loss <= entry_price",
       "action": "SET stop loss above entry price (giá SL  giá vào lệnh)",
       "reason": "Ngăn lỗi đặt SL dưới mức vào lệnh, giảm mức lỗ lớn và bảo vệ rủi ro như đã nêu trong LESSONS",
+      "evidence_n": 2,
+      "weight": 3
+    },
+    {
+      "id": "r1",
+      "when": "action == 'SELL' && setup_tag == 'FAILED_BREAKOUT' && bearish_confirmation && calculated_RR = 1.5",
+      "action": "ENTER SELL",
+      "reason": "Xác nhận xu hướng giảm và RR đủ giúp cải thiện expectancy âm của FAILED_BREAKOUT",
+      "evidence_n": 2,
+      "weight": 3
+    },
+    {
+      "id": "r4",
+      "when": "action == 'SELL' && stop_loss <= entry_price",
+      "action": "SET stop loss above entry price",
+      "reason": "Bảo vệ rủi ro, tránh lỗi đặt SL dưới mức vào lệnh như đã ghi trong LESSONS",
       "evidence_n": 2,
       "weight": 3
     },
@@ -62,45 +86,21 @@
       "weight": 2
     },
     {
-      "id": "r4",
-      "when": "setup_tag == 'BREAKDOWN' && price < support && volume_surge && calculated_RR = 1.5",
-      "action": "ENTER SELL",
-      "reason": "Duy trì expectancy cao (+1.308) của BREAKDOWN bằng cách xác nhận phá vỡ thực sự và RR đủ",
+      "id": "r2",
+      "when": "action == 'SELL' && setup_tag == 'FAILED_BREAKOUT' && calculated_RR < 1.5",
+      "action": "SKIP ENTRY",
+      "reason": "RR thấp làm giảm kỳ vọng lợi nhuận, tránh lỗ",
       "evidence_n": 2,
-      "weight": 2
-    },
-    {
-      "id": "r3",
-      "when": "action == 'BUY' && setup_tag == 'FAILED_BREAKOUT'",
-      "action": "SKIP entry (HOLD)",
-      "reason": "BUY trên FAILED_BREAKOUT đã gây 2 lỗ liên tiếp trong các giao dịch gần đây",
-      "evidence_n": 1,
-      "weight": 2
-    },
-    {
-      "id": "r6",
-      "when": "setup_tag == 'BREAKDOWN'",
-      "action": "ENTER only after breakdown confirmation (price below support + volume surge)",
-      "reason": "Duy trì expectancy cao (+1.308) của BREAKDOWN bằng cách xác nhận phá vỡ thực sự",
-      "evidence_n": 1,
       "weight": 2
     },
     {
       "id": "r5",
-      "when": "consecutive_losses_on('FAILED_BREAKOUT') = 3",
+      "when": "consecutive_losses('FAILED_BREAKOUT') = 3",
       "action": "PAUSE FAILED_BREAKOUT setup for next 5 trades",
-      "reason": "Ngăn chặn chuỗi thua lỗ kéo dài khi expectancy âm của FAILED_BREAKOUT",
+      "reason": "Ngăn chuỗi thua lỗ kéo dài khi expectancy âm",
       "evidence_n": 2,
-      "weight": 1
-    },
-    {
-      "id": "r7",
-      "when": "position_profit = 1 * initial_Risk",
-      "action": "ACTIVATE trailing stop (trail by 0.5R) instead of static SL",
-      "reason": "Tối ưu lợi nhuận mà không chỉ tăng WR; tránh cấm giao dịch",
-      "evidence_n": 1,
-      "weight": 1
+      "weight": 2
     }
   ],
-  "last_summary": "Các quy tắc mới tập trung vào việc cải thiện expectancy và PnL bằng cách (1) chắc chắn đặt SL đúng phía trên mức vào lệnh cho lệnh bán, (2) yêu cầu xác nhận xu hướng giảm và RR ≥ 2 cho FAILED_BREAKOUT, (3) loại bỏ BUY trên FAILED_BREAKOUT, (4) chỉ vào lệnh BREAKDOWN khi có xác nhận phá vỡ và RR đủ, (5) lọc bỏ mọi giao dịch có RR < 1.5, (6) giảm kích thước vị thế khi kỳ vọng vòng 20 âm, (7) kích ho"
+  "last_summary": "Tập trung cải thiện expectancy và PnL bằng cách chỉ vào các tín hiệu SELL có xác nhận giảm giá và RR ≥1.5, đồng thời giữ vững lợi nhuận cao của BREAKDOWN khi có xác nhận phá vỡ. Các quy tắc bảo vệ rủi ro (SL trên mức vào lệnh, giảm kích thước vị thế khi kỳ vọng âm, tạm dừng FAILED_BREAKOUT sau chuỗi thua) giảm thiểu drawdown. Trailing stop được kích hoạt khi lợi nhuận đạt 1R để tối đa hoá lợi nhuậ"
 }
