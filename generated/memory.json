@@ -56,6 +56,18 @@
         "close_reason": "TP",
         "last_pnl": 3.2532,
         "last_r": 1.8667959705393753
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Nhận định 'failed breakout' không đúng vì nến đầu tiên sau khi vào lệnh đóng trên mức kháng cự, cho thấy breakout thực sự thành công và hướng giao dịch SELL đã sai.",
+        "actionable_rule": "Trước khi vào lệnh SELL dựa trên tín hiệu 'failed breakout', phải xác nhận ít nhất một nến đóng dưới mức kháng cự; nếu có nến nào đóng trên mức kháng cự ngay sau tín hiệu, hủy lệnh hoặc xem xét đảo chiều.",
+        "weight": 3,
+        "evidence_n": 1,
+        "classification": "PROCESS_ERROR",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": -1.4801,
+        "last_r": -1.0000027025274036
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
