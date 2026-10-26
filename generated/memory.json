@@ -68,6 +68,18 @@
         "close_reason": "TP",
         "last_pnl": 3.2532,
         "last_r": 1.8667959705393753
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Stop loss được đặt ở phía dưới mức vào lệnh cho lệnh bán, sai hướng, dẫn đến việc đóng lệnh tại mức được gọi là SL nhưng thực tế lại là lợi nhuận và gây nhầm lẫn trong việc xác định WIN/LOSS.",
+        "actionable_rule": "Khi vào lệnh bán, luôn đặt stop loss phía trên mức vào lệnh (giá tăng) và kiểm tra lại hướng của SL/TP trước khi gửi lệnh để tránh lỗi đặt SL sai phía.",
+        "weight": 3,
+        "evidence_n": 1,
+        "classification": "PROCESS_ERROR",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": 1.0025,
+        "last_r": 0.3375083367084167
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
