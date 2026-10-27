@@ -80,6 +80,18 @@
         "close_reason": "SL",
         "last_pnl": 1.0025,
         "last_r": 0.3375083367084167
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Mức SL được đặt quá chặt (chỉ cách mức vào 242 điểm) trong khi biến động giá trong khung thời gian ngắn lên tới hơn 1.700 điểm, khiến lệnh bị dừng lỗ ngay khi giá chỉ tạm thời vượt qua mức kháng cự mà chưa thực sự phá vỡ xu hướng giảm.",
+        "actionable_rule": "Trong các giao dịch bán dựa trên mô hình failed breakout, đặt SL cách mức kháng cự ít nhất 1‑2% giá (hoặc ít nhất bằng độ dao động trung bình của nến gần nhất) để giảm khả năng stop sớm do dao động ngắn hạn.",
+        "weight": 2,
+        "evidence_n": 1,
+        "classification": "VALID_LOSS",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": -0.9117,
+        "last_r": -1.0000120655179563
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
