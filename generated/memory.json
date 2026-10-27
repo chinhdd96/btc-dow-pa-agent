@@ -92,6 +92,18 @@
         "close_reason": "SL",
         "last_pnl": -0.9117,
         "last_r": -1.0000120655179563
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "SL được đặt sai phía (nằm trên mức vào lệnh) khiến lệnh BUY đóng ngay khi giá tăng, không phản ánh rủi ro thực sự và vi phạm quy tắc quản lý rủi ro.",
+        "actionable_rule": "Khi mở lệnh BUY, luôn kiểm tra và đặt SL dưới mức vào lệnh; nếu SL nằm trên entry, tự động từ chối gửi lệnh.",
+        "weight": 3,
+        "evidence_n": 1,
+        "classification": "PROCESS_ERROR",
+        "setup_tag": "SWEEP",
+        "close_reason": "SL",
+        "last_pnl": 0.2609,
+        "last_r": 0.24996694572775927
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
