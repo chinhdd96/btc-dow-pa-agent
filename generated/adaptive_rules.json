@@ -1,8 +1,8 @@
 {
   "version": 1,
   "stable": false,
-  "updated_at": "2026-10-27T00:05:16.993845+00:00",
-  "closes_at_review": 23,
+  "updated_at": "2026-10-27T21:05:16.045017+00:00",
+  "closes_at_review": 24,
   "freeze": false,
   "rules": [
     {
@@ -102,5 +102,5 @@
       "weight": 2
     }
   ],
-  "last_summary": "Các quy tắc trên tập trung vào việc duy trì các setup có kỳ vọng dương (BREAKDOWN), nâng cao tiêu chuẩn RR cho FAILED_BREAKOUT, và luôn đặt SL trên mức vào lệnh để giảm lỗ. Đồng thời, chúng giới hạn giao dịch khi có chuỗi thua lỗ, giảm kích thước vị thế khi expectancy âm, và tránh các lệnh có RR thấp. Các biện pháp điều chỉnh TP và giới hạn số lệnh trong ngày giúp cải thiện win rate và bảo vệ vốn "
+  "last_summary": "meta_review error: No JSON object found in LLM response: '{\\n  \"rules\": [\\n    {\\n      \"when\": \"setup_tag == \\'BREAKDOWN\\' && price < support && volume_surge && calculated_RR = 1.5\",\\n      \"action\": \"ENTER SELL\",\\n      \"reason\": \"Giữ lại setup BREAKDOWN có kỳ vọng dương (+1.308) và RR đủ để tăng lợi n'"
 }
