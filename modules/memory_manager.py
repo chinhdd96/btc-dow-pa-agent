@@ -52,8 +52,14 @@ def _memory_regime_bucket(regime: str) -> str:
 
 
 class MemoryManager:
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        enable_remote_backup: bool = True,
+    ) -> None:
         self.path = Path(path or config.PATHS["MEMORY"])
+        self.enable_remote_backup = enable_remote_backup
         if not self.path.exists():
             self._write(DEFAULT_MEMORY)
 
@@ -90,10 +96,11 @@ class MemoryManager:
             json.dump(data, tmp, ensure_ascii=False, indent=2)
             tmp_path = Path(tmp.name)
         tmp_path.replace(self.path)
-        try:
-            backup_remote(data)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("memory backup skipped: %s", exc)
+        if self.enable_remote_backup:
+            try:
+                backup_remote(data)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory backup skipped: %s", exc)
 
     def load(self) -> dict[str, Any]:
         return self._read()
