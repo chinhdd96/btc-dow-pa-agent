@@ -114,8 +114,8 @@ DIVERSITY_SCORE_BONUS = float(os.getenv("DIVERSITY_SCORE_BONUS", "1.0"))
 # Kill adaptive rules that fail after enough closes
 RULE_KILL_MIN_TRADES = int(os.getenv("RULE_KILL_MIN_TRADES", "6"))
 
-# Historical replay (Blitz: set REPLAY_ON_START=true once, skip when marker exists)
-REPLAY_ON_START = os.getenv("REPLAY_ON_START", "false").strip().lower() in {
+# Historical replay: on start → 30d backtest then live (skip if done marker unless FORCE)
+REPLAY_ON_START = os.getenv("REPLAY_ON_START", "true").strip().lower() in {
     "1",
     "true",
     "yes",
