@@ -104,6 +104,18 @@
         "close_reason": "SL",
         "last_pnl": 0.2609,
         "last_r": 0.24996694572775927
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Hậu phẫu LLM lỗi: Error code: 429 - Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01m3rpjfq9ev9skfr0yvpk9jes` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 198756, Requested 3883. Please try again in 19m0.048s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing",
+        "actionable_rule": "Giả thuyết cần kiểm chứng: xem lại thủ công; giữ nguyên quy tắc rủi ro.",
+        "weight": 2,
+        "evidence_n": 1,
+        "classification": "INSUFFICIENT_EVIDENCE",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": -4.0671,
+        "last_r": -1.0000105727556805
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
