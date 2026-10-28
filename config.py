@@ -106,6 +106,13 @@ MANAGE_CLOSE_MIN_SCORE = float(os.getenv("MANAGE_CLOSE_MIN_SCORE", "4.5"))
 ZERO_TRADE_HOURS = float(os.getenv("ZERO_TRADE_HOURS", "12"))
 TRADE_STATS_MAX_CHARS = int(os.getenv("TRADE_STATS_MAX_CHARS", "600"))
 ADAPTIVE_RULES_MAX = int(os.getenv("ADAPTIVE_RULES_MAX", "12"))
+# Diversity / streak when bleeding same setup
+SETUP_STREAK_LEN = int(os.getenv("SETUP_STREAK_LEN", "3"))
+SETUP_STREAK_PENALTY = float(os.getenv("SETUP_STREAK_PENALTY", "1.0"))
+DIVERSITY_AFTER_STREAK = int(os.getenv("DIVERSITY_AFTER_STREAK", "3"))
+DIVERSITY_SCORE_BONUS = float(os.getenv("DIVERSITY_SCORE_BONUS", "1.0"))
+# Kill adaptive rules that fail after enough closes
+RULE_KILL_MIN_TRADES = int(os.getenv("RULE_KILL_MIN_TRADES", "6"))
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
