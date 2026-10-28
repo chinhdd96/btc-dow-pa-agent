@@ -527,9 +527,15 @@ NHIỆM VỤ:
 
    - VALID_LOSS: setup hợp lệ nhưng kết quả thua.
 
-   - VALID_WIN: setup hợp lệ và kết quả thắng.
+   - VALID_WIN: setup hợp lệ và kết quả thắng (không phải trail BE nhỏ).
+
+   - BAD_SETUP: thesis/setup kém — nên đổi setup/TF sau này.
+
+   - GOOD_EDGE: thắng chất lượng (TP hoặc ≥0.3R) — giữ điều kiện tương tự.
 
    - INSUFFICIENT_EVIDENCE: thiếu dữ liệu để kết luận.
+
+   CẤM gắn GOOD_EDGE cho thắng nhỏ do trail/SL scrape.
 
 4. Rút ra tối đa 01 actionable_rule ngắn gọn, có thể kiểm chứng ở các giao dịch sau; ưu tiên cải thiện expectancy/PnL thay vì tối đa hóa win rate.
 
@@ -581,7 +587,21 @@ FORMAT:
 
 _POST_MORTEM_CLASSIFICATIONS = frozenset(
 
-    {"PROCESS_ERROR", "VALID_LOSS", "VALID_WIN", "INSUFFICIENT_EVIDENCE"}
+    {
+
+        "PROCESS_ERROR",
+
+        "VALID_LOSS",
+
+        "VALID_WIN",
+
+        "BAD_SETUP",
+
+        "GOOD_EDGE",
+
+        "INSUFFICIENT_EVIDENCE",
+
+    }
 
 )
 
@@ -2533,9 +2553,11 @@ class LLMAgent:
 
         stats_text: str,
 
+        losing_tags: list[str] | None = None,
+
     ) -> dict[str, Any]:
 
-        """Propose adaptive_rules focused on expectancy/PnL (not raw WR)."""
+        """Propose APPLY adaptive_rules focused on expectancy/PnL (not raw WR)."""
 
         slim_trades = []
 
@@ -2561,17 +2583,31 @@ class LLMAgent:
 
             )
 
+        lose = sorted({str(x).upper() for x in (losing_tags or [])})
+
         prompt = (
 
             "Bạn là Risk Officer tối ưu LỢI NHUẬN paper BTC.\n"
 
-            "Nhiệm vụ tối thượng: chủ động cải thiện lợi nhuận ròng/expectancy dài hạn qua từng vòng học paper. CẤM đề xuất trail BE chỉ để tăng WR.\n"
+            "Nhiệm vụ: cải thiện expectancy/PnL. CẤM trail BE để tăng WR.\n"
 
-            "Dựa trên TRADE_STATS + recent trades + lessons, tìm setup/khung hiệu quả, phát hiện setup kém và đề xuất ≤8 adaptive rules có thể kiểm chứng; không tự động cấm mọi giao dịch vì vài lệnh lỗ.\n"
+            "Xuất ≤8 adaptive rules theo schema APPLY:\n"
 
-            "Mỗi rule: when (điều kiện), action (HOLD/chỉ L3/RR≥x/...), reason, "
+            "  when_setup: TAG hoặc *\n"
 
-            "evidence_n, weight 1–3.\n"
+            "  effect: RAISE_SCORE | FORBID_SOFT | PREFER_ALT | CHECKLIST\n"
+
+            "  magnitude: điểm cộng (0.5–2)\n"
+
+            "  prefer_tags: list khi PREFER_ALT\n"
+
+            "  when, action, reason, evidence_n, weight 1–3\n"
+
+            f"Losing setups (CẤM đề xuất ENTER cùng tag): {lose or '(không)'}\n"
+
+            "Nếu có losing setup: BẮT BUỘC ≥1 rule PREFER_ALT hoặc FORBID_SOFT.\n"
+
+            "CẤM rule kiểu action==SELL trần hoặc ENTER SELL FAILED_BREAKOUT.\n"
 
             "Trả về 1 JSON: {\"rules\":[...], \"summary\":\"...\"}. Không markdown.\n\n"
 
@@ -2591,7 +2627,9 @@ class LLMAgent:
 
                 system=(
 
-                    "Return only JSON with rules array. "
+                    "Return only JSON with rules array using effect "
+
+                    "RAISE_SCORE|FORBID_SOFT|PREFER_ALT|CHECKLIST. "
 
                     "Prioritize expectancy and PnL. Vietnamese reason text."
 
@@ -2643,6 +2681,8 @@ class LLMAgent:
 
         filled_at: str = "",
 
+        is_quality_win: bool | None = None,
+
     ) -> dict[str, Any]:
 
         candles_str = (
@@ -2693,7 +2733,7 @@ class LLMAgent:
 
                     "Có classification ∈ PROCESS_ERROR|VALID_LOSS|VALID_WIN|"
 
-                    "INSUFFICIENT_EVIDENCE. weight 1–3. "
+                    "BAD_SETUP|GOOD_EDGE|INSUFFICIENT_EVIDENCE. weight 1–3. "
 
                     "mistake_or_insight và actionable_rule viết TIẾNG VIỆT. "
 
@@ -2709,7 +2749,21 @@ class LLMAgent:
 
             data = extract_json_object(raw)
 
-            return self._normalize_post_mortem(data, regime=regime)
+            return self._normalize_post_mortem(
+
+                data,
+
+                regime=regime,
+
+                result=str(result or ""),
+
+                pnl=float(pnl or 0),
+
+                close_reason=str(close_reason or ""),
+
+                is_quality_win=is_quality_win,
+
+            )
 
         except Exception as exc:  # noqa: BLE001
 
@@ -2747,13 +2801,19 @@ class LLMAgent:
 
         regime: str,
 
+        result: str = "",
+
+        pnl: float = 0.0,
+
+        close_reason: str = "",
+
+        is_quality_win: bool | None = None,
+
     ) -> dict[str, Any]:
 
         classification = str(data.get("classification") or "").upper().strip()
 
         if classification not in _POST_MORTEM_CLASSIFICATIONS:
-
-            # Infer soft default from wording if model omitted field
 
             blob = (
 
@@ -2767,9 +2827,55 @@ class LLMAgent:
 
                 classification = "PROCESS_ERROR"
 
+            elif "BAD_SETUP" in blob or "SETUP XẤU" in blob:
+
+                classification = "BAD_SETUP"
+
+            elif "GOOD_EDGE" in blob:
+
+                classification = "GOOD_EDGE"
+
             else:
 
                 classification = "INSUFFICIENT_EVIDENCE"
+
+        result_u = str(result or "").upper()
+
+        reason_u = str(close_reason or "").upper()
+
+        try:
+
+            pnl_f = float(pnl or 0)
+
+        except (TypeError, ValueError):
+
+            pnl_f = 0.0
+
+        quality = is_quality_win
+
+        if quality is None and result_u == "WIN":
+
+            quality = reason_u == "TP" or pnl_f >= 0.3
+
+        if classification == "GOOD_EDGE" and not quality:
+
+            classification = (
+
+                "VALID_WIN" if result_u == "WIN" and pnl_f > 0 else "INSUFFICIENT_EVIDENCE"
+
+            )
+
+        if classification == "VALID_WIN" and result_u == "LOSS":
+
+            classification = "VALID_LOSS"
+
+        if classification == "VALID_LOSS" and result_u == "WIN":
+
+            classification = "VALID_WIN" if quality else "INSUFFICIENT_EVIDENCE"
+
+        if result_u == "LOSS" and classification == "GOOD_EDGE":
+
+            classification = "BAD_SETUP"
 
         try:
 
@@ -2780,6 +2886,10 @@ class LLMAgent:
             weight = 1
 
         weight = max(1, min(3, weight))
+
+        if classification == "PROCESS_ERROR":
+
+            weight = max(weight, 3)
 
         return {
 
