@@ -114,6 +114,46 @@ DIVERSITY_SCORE_BONUS = float(os.getenv("DIVERSITY_SCORE_BONUS", "1.0"))
 # Kill adaptive rules that fail after enough closes
 RULE_KILL_MIN_TRADES = int(os.getenv("RULE_KILL_MIN_TRADES", "6"))
 
+# Historical replay (Blitz: set REPLAY_ON_START=true once, skip when marker exists)
+REPLAY_ON_START = os.getenv("REPLAY_ON_START", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REPLAY_FORCE = os.getenv("REPLAY_FORCE", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REPLAY_DAYS = int(os.getenv("REPLAY_DAYS", "30"))
+REPLAY_STEP_HOURS = max(1, int(os.getenv("REPLAY_STEP_HOURS", "1")))
+REPLAY_MANAGE_ENABLED = os.getenv("REPLAY_MANAGE_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REPLAY_SEED_MEMORY = os.getenv("REPLAY_SEED_MEMORY", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REPLAY_SEED_RULES = os.getenv("REPLAY_SEED_RULES", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+REPLAY_LLM_SLEEP_SEC = float(os.getenv("REPLAY_LLM_SLEEP_SEC", "1.5"))
+REPLAY_PROGRESS_EVERY = int(os.getenv("REPLAY_PROGRESS_EVERY", "24"))
+REPLAY_DIR = os.getenv("REPLAY_DIR", str(BASE_DIR / "generated" / "replay"))
+REPLAY_GITHUB_PATH = os.getenv(
+    "REPLAY_GITHUB_PATH", "generated/replay_summary.json"
+).strip()
+
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
 
@@ -189,4 +229,6 @@ PATHS = {
     "PAPER_ACCOUNT": str(BASE_DIR / "generated" / "paper_account.json"),
     "DECISION_HISTORY": str(BASE_DIR / "generated" / "decision_history.jsonl"),
     "ADAPTIVE_RULES": str(BASE_DIR / "generated" / "adaptive_rules.json"),
+    "REPLAY_SUMMARY": str(BASE_DIR / "generated" / "replay" / "summary.json"),
+    "REPLAY_DONE": str(BASE_DIR / "generated" / "replay" / "done.json"),
 }
