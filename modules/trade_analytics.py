@@ -43,15 +43,32 @@ def setup_tag_from_decision(decision: dict[str, Any] | None) -> str:
 
 def setup_tag_from_trade(trade: dict[str, Any]) -> str:
     tag = str(trade.get("setup_tag") or "").strip().upper()
-    if tag:
-        return tag
-    return setup_tag_from_decision(
+    # Strip REGIME_*_ prefix leftovers
+    if tag.startswith("REGIME_"):
+        m = re.search(r"REGIME_[A-Z]+_([A-Z_]+)$", tag)
+        if m:
+            tag = m.group(1)
+        else:
+            tag = tag.replace("REGIME_", "", 1)
+    if tag and tag not in {"UNKNOWN", "RANGE", "UPTREND", "DOWNTREND", "SIDEWAY", "CHOP"}:
+        return tag[:32]
+    inferred = setup_tag_from_decision(
         {
             "market_regime": trade.get("regime"),
+            "state": trade.get("state"),
             "trigger": trade.get("trigger"),
             "reasoning": trade.get("reasoning"),
+            "structure": trade.get("structure"),
         }
     )
+    return inferred if inferred else (tag[:32] if tag else "UNKNOWN")
+
+
+def ensure_trade_setup_tag(trade: dict[str, Any]) -> str:
+    """Normalize and write setup_tag onto trade dict; return tag."""
+    tag = setup_tag_from_trade(trade)
+    trade["setup_tag"] = tag
+    return tag
 
 
 def _r_multiple(trade: dict[str, Any]) -> float | None:
@@ -161,16 +178,22 @@ def summarize_trades(
             buckets[setup_tag_from_trade(t)].append(t)
         for tag, items in buckets.items():
             s = summarize_trades(items, rolling_n=len(items), with_setups=False)
+            gross_win = sum(max(0.0, float(x.get("pnl") or 0)) for x in items)
+            gross_loss = sum(abs(min(0.0, float(x.get("pnl") or 0))) for x in items)
+            pf = (gross_win / gross_loss) if gross_loss > 0 else (999.0 if gross_win > 0 else 0.0)
             by_setup[tag] = {
                 "n": s["n"],
                 "wr": s["wr"],
                 "quality_wr": s["quality_wr"],
                 "pnl": s["pnl"],
                 "expectancy": s["expectancy"],
+                "tp_ratio": s["tp_ratio"],
+                "profit_factor": round(pf, 3),
             }
 
     quality_wr = len(q_wins) / n
     tp_ratio = tp_like / n
+    streak_tag, streak_n = consecutive_setup_streak(window)
     stable = (
         n >= min(20, max(n_roll, 1))
         and expectancy >= 0
@@ -192,7 +215,73 @@ def summarize_trades(
         "avg_loss": round(avg_loss, 4),
         "by_setup": by_setup,
         "stable": stable,
+        "streak_tag": streak_tag,
+        "streak_n": streak_n,
     }
+
+
+def consecutive_setup_streak(
+    trades: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Return (tag, count) for consecutive same setup_tag at end of list."""
+    if not trades:
+        return "", 0
+    last = setup_tag_from_trade(trades[-1])
+    n = 0
+    for t in reversed(trades):
+        if setup_tag_from_trade(t) == last:
+            n += 1
+        else:
+            break
+    return last, n
+
+
+def diversity_score_penalty(
+    trades: list[dict[str, Any]],
+    setup_tag: str,
+) -> tuple[float, str]:
+    """
+    Extra score when repeating a bleeding setup streak.
+    Returns (extra_penalty, note).
+    """
+    tag = (setup_tag or "").upper()
+    if not tag or tag == "UNKNOWN":
+        return 0.0, ""
+    streak_tag, streak_n = consecutive_setup_streak(trades)
+    need = int(getattr(config, "DIVERSITY_AFTER_STREAK", 3) or 3)
+    if streak_n < need or streak_tag != tag:
+        return 0.0, ""
+    stats = setup_expectancy(trades, tag)
+    # Bleed if overall tag exp < 0, or recent streak mostly losses
+    recent = trades[-streak_n:]
+    recent_pnl = sum(float(t.get("pnl") or 0) for t in recent)
+    bleeding = stats.get("expectancy", 0) < 0 or recent_pnl < 0
+    if not bleeding:
+        return 0.0, ""
+    pen = float(getattr(config, "SETUP_STREAK_PENALTY", 1.0) or 1.0)
+    pen += float(getattr(config, "DIVERSITY_SCORE_BONUS", 1.0) or 1.0)
+    note = (
+        f"Diversity: streak {streak_tag}×{streak_n} đang bleed "
+        f"(exp={stats.get('expectancy', 0):+.3f} streakPnL={recent_pnl:+.2f}) "
+        f"→ +{pen:.1f} điểm — ưu tiên setup khác"
+    )
+    return pen, note
+
+
+def close_line_for_telegram(
+    trade: dict[str, Any],
+    classification: str,
+    trades: list[dict[str, Any]] | None = None,
+) -> str:
+    tag = ensure_trade_setup_tag(dict(trade))
+    r = _r_multiple(trade)
+    r_txt = f"{r:+.2f}R" if r is not None else "?R"
+    exp_txt = ""
+    if trades is not None:
+        st = setup_expectancy(trades, tag)
+        if st["n"]:
+            exp_txt = f" | setup_exp={st['expectancy']:+.3f} n={st['n']}"
+    return f"{tag} | {r_txt} | {classification or '?'}{exp_txt}"
 
 
 def setup_expectancy(trades: list[dict[str, Any]], setup_tag: str) -> dict[str, Any]:
@@ -271,6 +360,8 @@ def format_stats_for_prompt(
     s = summarize_trades(trades)
     if s["n"] == 0:
         return "(chưa có lệnh đóng — chưa có TRADE_STATS)"
+    streak_tag = s.get("streak_tag") or ""
+    streak_n = int(s.get("streak_n") or 0)
     lines = [
         (
             f"Rolling {s['n']}: PnL={s['pnl']:+.2f}u | expectancy={s['expectancy']:+.3f}/lệnh | "
@@ -279,8 +370,9 @@ def format_stats_for_prompt(
             f"avgW={s['avg_win']:+.2f} avgL=-{s['avg_loss']:.2f}"
         ),
         (
+            f"streak={streak_tag or '-'}×{streak_n} | "
             f"stable_mode={'YES' if s['stable'] else 'NO'} — "
-            "ưu tiên expectancy/PnL; setup âm → tìm setup khác, "
+            "ưu tiên expectancy/PnL; setup âm/streak bleed → đổi setup/TF, "
             "vẫn được trade L2+ (không đứng ngoài mãi)."
         ),
     ]
@@ -292,7 +384,8 @@ def format_stats_for_prompt(
     for tag, st in setups:
         lines.append(
             f"  {tag}: n={st['n']} exp={st['expectancy']:+.3f} "
-            f"pnl={st['pnl']:+.2f} qWR={st['quality_wr']*100:.0f}%"
+            f"pnl={st['pnl']:+.2f} PF={st.get('profit_factor', 0):.2f} "
+            f"qWR={st['quality_wr']*100:.0f}% TP={st.get('tp_ratio', 0)*100:.0f}%"
         )
     text = "\n".join(lines)
     if len(text) > budget:
