@@ -1,2 +1,2 @@
-opportunity-first soft gates 2026-10-22T02:20Z
-SETUP_BLOCK_HARD=false CHOP_REQUIRE_L3=false ZERO_TRADE_HOURS=12 ENTRY_MIN_SIGNAL_LEVEL=2
+expectancy-driven learning 2026-10-28T02:50Z
+SETUP_STREAK_PENALTY DIVERSITY APPLY rules auto-kill
