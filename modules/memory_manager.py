@@ -145,7 +145,10 @@ class MemoryManager:
         return "\n".join(lines) if lines else "Chưa có bài học thực chiến."
 
     def record_closed_trade(self, result: str) -> dict[str, Any]:
-        """result: WIN | LOSS. Updates consecutive losses and min score."""
+        """
+        Legacy single-trade bump. Prefer resync_stats_from_trades(paper)
+        so system_stats stays SSOT with paper.closed_trades.
+        """
         data = self._read()
         stats = data["system_stats"]
         total = int(stats.get("total_trades", 0)) + 1
@@ -162,6 +165,27 @@ class MemoryManager:
 
         stats["total_trades"] = total
         stats["win_rate"] = round(wins_approx / total, 4) if total else 0.0
+        self._write(data)
+        return stats
+
+    def resync_stats_from_trades(self, trades: list[dict[str, Any]]) -> dict[str, Any]:
+        """Rebuild system_stats from paper closed_trades (single source of truth)."""
+        data = self._read()
+        stats = data["system_stats"]
+        n = len(trades)
+        wins = sum(1 for t in trades if str(t.get("result") or "").upper() == "WIN")
+        consec = 0
+        for t in reversed(trades):
+            if str(t.get("result") or "").upper() == "WIN":
+                break
+            consec += 1
+        stats["total_trades"] = n
+        stats["win_rate"] = round(wins / n, 4) if n else 0.0
+        stats["consecutive_losses"] = consec
+        if consec >= config.MAX_CONSECUTIVE_LOSSES:
+            stats["current_min_score"] = config.PENALTY_MIN_SCORE
+        else:
+            stats["current_min_score"] = config.BASE_MIN_SCORE
         self._write(data)
         return stats
 
