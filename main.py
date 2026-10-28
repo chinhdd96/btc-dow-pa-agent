@@ -217,6 +217,18 @@ def validate_decision_hard(
     if soft_pen > 0:
         req_score += soft_pen
 
+    div_pen, div_note = trade_analytics.diversity_score_penalty(trades, setup_tag)
+    if div_pen > 0:
+        req_score += div_pen
+
+    # APPLY adaptive rules (RAISE_SCORE / FORBID_SOFT / PREFER_ALT)
+    rules_data = adaptive_rules.load_rules()
+    rule_extra, rule_notes, prefer_tags = adaptive_rules.apply_rules_to_score(
+        list(rules_data.get("rules") or []), setup_tag
+    )
+    if rule_extra > 0:
+        req_score += rule_extra
+
     chop_fb = trade_analytics.is_chop_failed_breakout(decision, bias)
     if chop_fb:
         req_score = max(req_score, config.BASE_MIN_SCORE + config.ADAPTIVE_CHOP_BONUS)
@@ -238,9 +250,12 @@ def validate_decision_hard(
         # Idle quá lâu: nới về BASE để không đứng ngoài mãi
         req_score = min(req_score, config.BASE_MIN_SCORE)
 
-    if soft_note:
+    notes = [n for n in (soft_note, div_note, *rule_notes) if n]
+    if prefer_tags:
+        notes.append(f"PREFER_ALT tags={prefer_tags}")
+    if notes:
         decision = dict(decision)
-        decision["reasoning"] = f"{soft_note}. {decision.get('reasoning', '')}"
+        decision["reasoning"] = f"{'; '.join(notes)}. {decision.get('reasoning', '')}"
 
     if score < req_score:
         decision = dict(decision)
@@ -613,18 +628,53 @@ def maybe_run_meta_review(
         return
 
     stats_txt = trade_analytics.format_stats_for_prompt(trades)
+    lose_tags = adaptive_rules.losing_setup_tags(trades)
     proposed = llm.run_meta_review(
         trades=trades,
         lessons_summary=memory.get_all_lessons_summary(),
         current_rules=list(rules_data.get("rules") or []),
         stats_text=stats_txt,
+        losing_tags=sorted(lose_tags),
     )
-    incoming = adaptive_rules.validate_and_normalize(proposed)
+    incoming = adaptive_rules.validate_and_normalize(
+        proposed, losing_tags=lose_tags, closes_now=n
+    )
+    # Ensure at least one PREFER_ALT / FORBID_SOFT when bleeding tags exist
+    has_pressure = any(
+        str(r.get("effect") or "") in {"PREFER_ALT", "FORBID_SOFT"}
+        for r in incoming
+    )
+    if lose_tags and not has_pressure:
+        top = sorted(
+            lose_tags,
+            key=lambda t: trade_analytics.setup_expectancy(trades, t).get("pnl", 0),
+        )[0]
+        incoming.append(
+            {
+                "id": f"auto_div_{top[:12]}",
+                "when": f"setup_tag=='{top}'",
+                "action": "PREFER_ALT",
+                "effect": "PREFER_ALT",
+                "when_setup": top,
+                "magnitude": 1.0,
+                "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP"],
+                "reason": f"Auto: {top} expectancy âm — ép đa dạng setup",
+                "evidence_n": trade_analytics.setup_expectancy(trades, top)["n"],
+                "weight": 3,
+                "created_at_closes": n,
+            }
+        )
     if rules_data.get("stable"):
-        # prune-only: keep existing, merge lightly
-        merged = adaptive_rules.merge_rules(list(rules_data.get("rules") or []), incoming[:3])
+        merged = adaptive_rules.merge_rules(
+            list(rules_data.get("rules") or []), incoming[:3]
+        )
     else:
-        merged = adaptive_rules.merge_rules(list(rules_data.get("rules") or []), incoming)
+        merged = adaptive_rules.merge_rules(
+            list(rules_data.get("rules") or []), incoming
+        )
+    merged, killed = adaptive_rules.kill_failed_rules(
+        merged, trades, closes_now=n
+    )
 
     fail_streak = int(state.get("meta_review_fail_streak") or 0)
     if stats.get("expectancy", 0) < 0 and stats.get("pnl", 0) < 0:
@@ -640,6 +690,7 @@ def maybe_run_meta_review(
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "closes_at_review": n,
             "last_summary": str(proposed.get("summary") or "")[:400],
+            "killed": killed[-8:],
         }
     )
     adaptive_rules.save_rules(rules_data)
@@ -647,11 +698,13 @@ def maybe_run_meta_review(
     state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
     state["meta_review_fail_streak"] = fail_streak
     _save_state(state)
+    kill_txt = f" killed={killed}" if killed else ""
     notifier.send(
         "Meta-review adaptive_rules\n"
         f"n={n} exp={stats['expectancy']:+.3f} pnl={stats['pnl']:+.2f} "
         f"qWR={stats['quality_wr']*100:.0f}% rules={len(merged)} "
-        f"stable={rules_data['stable']} freeze={freeze}\n"
+        f"stable={rules_data['stable']} freeze={freeze}{kill_txt}\n"
+        f"losing_tags={sorted(lose_tags)}\n"
         f"{(proposed.get('summary') or '')[:300]}"
     )
 
@@ -695,34 +748,57 @@ def handle_paper_closed(
         ),
         close_reason=close_reason,
         filled_at=str(filled_at or ""),
+        is_quality_win=trade_analytics.is_quality_win(trade),
     )
-    setup_tag = str(
-        trade.get("setup_tag")
-        or trade_analytics.setup_tag_from_trade(trade)
-    )
+    paper = PaperPortfolio()
+    # Ensure closed trade has normalized setup_tag in ledger
+    setup_tag = trade_analytics.ensure_trade_setup_tag(trade)
+    try:
+        paper.normalize_last_closed_setup_tag(setup_tag)
+    except Exception:  # noqa: BLE001
+        pass
+    closed_all = paper.closed_trades()
+    # Prefer full list with this trade's tag fixed
+    if closed_all:
+        trade_analytics.ensure_trade_setup_tag(closed_all[-1])
+
+    classification = str(lesson.get("classification") or "")
+    # Micro side-effects: PROCESS_ERROR → heavier lesson weight
+    weight = int(lesson.get("weight", 1) or 1)
+    if classification == "PROCESS_ERROR":
+        weight = max(weight, 3)
+    elif classification == "BAD_SETUP":
+        weight = max(weight, 2)
+    elif classification == "GOOD_EDGE":
+        weight = max(weight, 2)
+
     r_mult = trade_analytics.r_multiple_of_trade(trade)
     memory.add_lesson(
         regime=lesson.get("regime", trade.get("regime", "REGIME_SIDEWAY_CHOP")),
         mistake_or_insight=lesson.get("mistake_or_insight", ""),
         actionable_rule=lesson.get("actionable_rule", ""),
-        weight=int(lesson.get("weight", 1) or 1),
-        classification=str(lesson.get("classification") or ""),
+        weight=weight,
+        classification=classification,
         setup_tag=setup_tag,
         close_reason=close_reason,
         pnl=pnl,
         r_multiple=r_mult,
     )
-    stats = memory.record_closed_trade(result)
+    stats = memory.resync_stats_from_trades(closed_all)
     notifier.notify_post_mortem(lesson, result, pnl)
     result_vi = "THẮNG" if str(result).upper() == "WIN" else "THUA"
+    line = trade_analytics.close_line_for_telegram(
+        trade, classification, trades=closed_all
+    )
     notifier.send(
         f"PAPER ĐÓNG LỆNH [{closed_event.get('reason')}] {result_vi} "
         f"PnL={pnl:+.4f}u\n"
-        f"{_paper_status_text(PaperPortfolio())}\n"
+        f"{line}\n"
+        f"{_paper_status_text(paper)}\n"
         f"điểm tối thiểu (memory)={stats.get('current_min_score')}"
     )
     try:
-        maybe_run_meta_review(memory, llm, notifier, PaperPortfolio())
+        maybe_run_meta_review(memory, llm, notifier, paper)
     except Exception as exc:  # noqa: BLE001
         logger.warning("meta_review after close skipped: %s", exc)
 
