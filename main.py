@@ -724,12 +724,22 @@ def handle_paper_closed(
     notifier: Notifier,
     closed_event: dict[str, Any],
     binance: BinanceClient,
+    *,
+    paper: PaperPortfolio | None = None,
+    post_trade_candles: list[dict[str, Any]] | str | None = None,
 ) -> None:
     trade = closed_event.get("trade") or {}
     result = closed_event.get("result", "LOSS")
     pnl = float(closed_event.get("pnl", 0))
     filled_at = trade.get("opened_at") or trade.get("filled_at") or ""
-    candles = _post_mortem_candles(binance, filled_at)
+    if post_trade_candles is not None:
+        candles: list[dict[str, Any]] | str = post_trade_candles
+    else:
+        try:
+            candles = _post_mortem_candles(binance, filled_at)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post_mortem candles skipped: %s", exc)
+            candles = []
     close_reason = str(closed_event.get("reason") or trade.get("reason") or "")
     lesson = llm.run_post_mortem(
         action=trade.get("action", ""),
@@ -750,7 +760,7 @@ def handle_paper_closed(
         filled_at=str(filled_at or ""),
         is_quality_win=trade_analytics.is_quality_win(trade),
     )
-    paper = PaperPortfolio()
+    paper = paper or PaperPortfolio()
     # Ensure closed trade has normalized setup_tag in ledger
     setup_tag = trade_analytics.ensure_trade_setup_tag(trade)
     try:
@@ -1290,6 +1300,20 @@ def main() -> None:
         logger.error("Cannot init Binance client: %s", exc)
         notifier.notify_error("startup", str(exc))
         raise SystemExit(1) from exc
+
+    # Optional 1-month historical replay on Blitz (once; seed memory then live)
+    if config.REPLAY_ON_START:
+        try:
+            from modules.replay_engine import maybe_run_replay_on_start
+
+            maybe_run_replay_on_start(binance, llm, notifier)
+            # Reload memory/rules after seed
+            memory = MemoryManager()
+            if config.PAPER_MODE:
+                paper = PaperPortfolio()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("replay on start failed: %s", exc)
+            notifier.notify_error("replay_on_start", str(exc))
 
     # Schedule jobs — align to clock so each run is after H1 close (HH:00)
     at_mm = f":{config.DECISION_AT_MINUTE:02d}"
