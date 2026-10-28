@@ -17,6 +17,18 @@ import config
 logger = logging.getLogger(__name__)
 
 EFFECTS = frozenset({"RAISE_SCORE", "FORBID_SOFT", "PREFER_ALT", "CHECKLIST"})
+_REMOTE_BACKUP = True
+_PATH_OVERRIDE: Path | None = None
+
+
+def set_remote_backup(enabled: bool) -> None:
+    global _REMOTE_BACKUP
+    _REMOTE_BACKUP = bool(enabled)
+
+
+def set_rules_path(path: str | Path | None) -> None:
+    global _PATH_OVERRIDE
+    _PATH_OVERRIDE = Path(path) if path else None
 
 DEFAULT_RULES: dict[str, Any] = {
     "version": 2,
@@ -29,6 +41,8 @@ DEFAULT_RULES: dict[str, Any] = {
 
 
 def _path() -> Path:
+    if _PATH_OVERRIDE is not None:
+        return _PATH_OVERRIDE
     return Path(config.PATHS["ADAPTIVE_RULES"])
 
 
@@ -69,10 +83,11 @@ def save_rules(data: dict[str, Any]) -> None:
         json.dump(data, tmp, ensure_ascii=False, indent=2)
         tmp_path = Path(tmp.name)
     tmp_path.replace(path)
-    try:
-        backup_remote(data)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("adaptive_rules backup skipped: %s", exc)
+    if _REMOTE_BACKUP:
+        try:
+            backup_remote(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("adaptive_rules backup skipped: %s", exc)
 
 
 def _infer_effect(action: str, when: str) -> str | None:
