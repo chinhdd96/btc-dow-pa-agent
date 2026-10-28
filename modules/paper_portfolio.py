@@ -294,6 +294,19 @@ class PaperPortfolio:
             return trades
         return trades[-max(0, int(n)) :]
 
+    def normalize_last_closed_setup_tag(self, setup_tag: str) -> None:
+        """Persist normalized setup_tag onto the most recent closed trade."""
+        tag = (setup_tag or "").strip().upper()
+        if not tag:
+            return
+        data = self._read()
+        trades = list(data.get("closed_trades") or [])
+        if not trades:
+            return
+        trades[-1]["setup_tag"] = tag
+        data["closed_trades"] = trades
+        self._write(data)
+
     def place_signal(
         self,
         action: str,
@@ -736,6 +749,13 @@ class PaperPortfolio:
             "opened_at": position.get("filled_at"),
             "closed_at": _now_iso(),
         }
+        # Normalize setup_tag for ledger / learning loop
+        try:
+            from modules import trade_analytics
+
+            trade_analytics.ensure_trade_setup_tag(trade)
+        except Exception:  # noqa: BLE001
+            pass
         data["closed_trades"].append(trade)
         # giữ tối đa 200 lệnh gần nhất
         data["closed_trades"] = data["closed_trades"][-200:]
