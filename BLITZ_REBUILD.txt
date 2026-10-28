@@ -1,2 +1,2 @@
-expectancy-driven learning 2026-10-28T02:50Z
-SETUP_STREAK_PENALTY DIVERSITY APPLY rules auto-kill
+replay-30d on Blitz 2026-10-28T03:12Z
+Set REPLAY_ON_START=true HISTORY_GITHUB_TOKEN=...
