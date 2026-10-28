@@ -1,2 +1,2 @@
-replay-30d on Blitz 2026-10-28T03:12Z
-Set REPLAY_ON_START=true HISTORY_GITHUB_TOKEN=...
+REPLAY_ON_START default true 2026-10-28T03:44Z
+Restart Blitz; set REPLAY_FORCE=true if skip marker
