@@ -17,7 +17,21 @@ import config
 logger = logging.getLogger(__name__)
 
 
+_CLOCK_ISO = None  # optional replay clock: () -> iso str
+
+
+def set_paper_clock(fn: Any | None) -> None:
+    """Inject ISO clock for historical replay (None = wall clock)."""
+    global _CLOCK_ISO
+    _CLOCK_ISO = fn
+
+
 def _now_iso() -> str:
+    if _CLOCK_ISO is not None:
+        try:
+            return str(_CLOCK_ISO())
+        except Exception:  # noqa: BLE001
+            pass
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -199,8 +213,14 @@ class PaperPortfolio:
     Không gọi Binance order API — khớp entry/SL/TP theo giá live.
     """
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        enable_remote_backup: bool = True,
+    ) -> None:
         self.path = Path(path or config.PATHS["PAPER_ACCOUNT"])
+        self.enable_remote_backup = enable_remote_backup
         if not self.path.exists():
             # Don't backup fresh default — would overwrite remote after failed restore
             self._write(self._default(), backup=False)
@@ -250,7 +270,7 @@ class PaperPortfolio:
             json.dump(data, tmp, ensure_ascii=False, indent=2)
             tmp_name = tmp.name
         Path(tmp_name).replace(self.path)
-        if backup:
+        if backup and self.enable_remote_backup:
             try:
                 backup_remote(data)
             except Exception as exc:  # noqa: BLE001
