@@ -1,8 +1,8 @@
 {
   "system_stats": {
-    "total_trades": 9,
-    "win_rate": 0.4444,
-    "consecutive_losses": 1,
+    "total_trades": 25,
+    "win_rate": 0.44,
+    "consecutive_losses": 0,
     "current_min_score": 5.0
   },
   "lessons_by_regime": {
