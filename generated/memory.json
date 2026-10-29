@@ -128,6 +128,18 @@
         "close_reason": "TP",
         "last_pnl": 3.6041,
         "last_r": 4.4924226748867575
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Mặc dù setup đáp ứng các tiêu chí R:R và xác suất, tín hiệu FAILED_BREAKOUT đã không phản ánh đúng hướng giá; giá đã phá vỡ mức kháng cự và chạm SL ngay trong nến đầu, cho thấy độ tin cậy của tín hiệu này trong khung thời gian này còn hạn chế.",
+        "actionable_rule": "Khi sử dụng tín hiệu FAILED_BREAKOUT để vào lệnh bán, nên xác nhận thêm bằng ít nhất một chỉ báo phụ (ví dụ: divergence, mô hình nến giảm) hoặc đặt SL cách mức kháng cự ít nhất 1 ATR để giảm khả năng bị chạm SL do đợt bật lên ngắn hạn.",
+        "weight": 2,
+        "evidence_n": 1,
+        "classification": "VALID_LOSS",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "SL",
+        "last_pnl": -1.6795,
+        "last_r": -0.999985114839017
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
