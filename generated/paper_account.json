@@ -1,34 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 996.1346852601638,
+  "balance": 999.7387795644088,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "SELL",
-    "entry": 81332.5,
-    "stop_loss": 81550.0,
-    "initial_stop_loss": 81550.0,
-    "initial_r": 0.802262,
-    "take_profit": 80355.4,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0036885623828112994,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Soft: FAILED_BREAKOUT exp=-0.321 pnl=-6.74 n=21 → +0.5 điểm. Với cấu trúc range hiện tại, mức kháng cự 81500 đã bị phá nhưng không duy trì (failed breakout). Sweep high back cho thấy áp lực bán mạnh. Nếu giá tiếp tục giảm và chạm vào hỗ trợ 80355.4, lợi nhuận tiềm năng khoảng 977 điểm, trong khi rủi ro (SL) chỉ khoảng 218 điểm, cho R:R 4, đáp ứng tiêu chuẩn R:R ≥1.2. Invalidation rõ ràng là giá đóng cửa trên 81500, do đó lệnh bán có xác suất thắng cao (~65%).",
-    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
-    "signal_level": 2,
-    "win_probability": 0.65,
-    "trigger": "Giá đã phá kháng cự 81500 nhưng nhanh chóng quay lại dưới mức này (high sweep back), tạo dấu hiệu failed breakout",
-    "invalidation": "Giá đóng cửa trên 81500 hoặc tái chiếm mức kháng cự",
-    "setup_tag": "FAILED_BREAKOUT",
-    "created_at": "2026-10-28T21:05:09.739563+00:00",
-    "filled_at": "2026-10-28T21:05:11.817421+00:00",
-    "fill_price": 81332.5,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -485,12 +462,33 @@
       "initial_r": 1.043738,
       "opened_at": "2026-10-27T18:05:12.212514+00:00",
       "closed_at": "2026-10-27T21:05:02.554063+00:00"
+    },
+    {
+      "action": "SELL",
+      "entry": 81332.5,
+      "exit": 80355.4,
+      "sl": 81550.0,
+      "tp": 80355.4,
+      "quantity": 0.0036885623828112994,
+      "margin": 100.0,
+      "pnl": 3.6041,
+      "result": "WIN",
+      "reason": "TP",
+      "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+      "reasoning": "Soft: FAILED_BREAKOUT exp=-0.321 pnl=-6.74 n=21 → +0.5 điểm. Với cấu trúc range hiện tại, mức kháng cự 81500 đã bị phá nhưng không duy trì (failed breakout). Sweep high back cho thấy áp lực bán mạnh. Nếu giá tiếp tục giảm và chạm vào hỗ trợ 80355.4, lợi nhuận tiềm năng khoảng 977 điểm, trong khi rủi ro (SL) chỉ khoảng 218 điểm, cho R:R 4, đáp ứng tiêu chuẩn R:R ≥1.2. Invalidation rõ ràng là giá đóng cửa trên 81500, do đó lệnh bán có xác suất thắng cao (~65%).",
+      "signal_level": 2,
+      "win_probability": 0.65,
+      "setup_tag": "FAILED_BREAKOUT",
+      "trigger": "Giá đã phá kháng cự 81500 nhưng nhanh chóng quay lại dưới mức này (high sweep back), tạo dấu hiệu failed breakout",
+      "initial_r": 0.802262,
+      "opened_at": "2026-10-28T21:05:11.817421+00:00",
+      "closed_at": "2026-10-29T02:05:02.562944+00:00"
     }
   ],
   "stats": {
-    "total_trades": 24,
-    "wins": 10,
+    "total_trades": 25,
+    "wins": 11,
     "losses": 14,
-    "realized_pnl": -3.865314739836351
+    "realized_pnl": -0.26122043559140895
   }
 }
