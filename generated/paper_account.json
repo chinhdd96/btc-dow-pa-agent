@@ -4,7 +4,27 @@
   "balance": 999.7387795644088,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": null,
+  "pending": {
+    "action": "SELL",
+    "entry": 81255.1,
+    "stop_loss": 81710.0,
+    "initial_stop_loss": 81710.0,
+    "initial_r": 1.679525,
+    "take_profit": 80472.0,
+    "margin": 100.0,
+    "leverage": 3,
+    "quantity": 0.0036920759435407745,
+    "notional": 300.0,
+    "order_type": "MARKET",
+    "reasoning": "Soft: FAILED_BREAKOUT exp=-0.143 pnl=-3.14 n=22 → +0.5 điểm; Rule auto_div_FAILED_BREAK: PREFER_ALT ['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP'] thay vì FAILED_BREAKOUT; PREFER_ALT tags=['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP']. Với cấu trúc range và trạng thái FAILED_BREAKOUT, xu hướng ngắn hạn là giảm. Trigger là breakout thất bại trên mức kháng cự 81500, xác nhận bằng việc giá đóng lại dưới mức này. Invalidation rõ ràng là giá vượt lại trên 81500. TP đặt ở mức hỗ trợ 80472, SL trên 81500 + 0.5 ATR (≈81710) để bảo vệ trước khả năng phá lại. R:R ≈1.72  1.2, win_probability 0.62, setup_score 6.5 đáp ứng ngưỡng L2, do đó đề xuất lệnh bán.",
+    "regime": "REGIME_RANGE_FAILED_BREAKOUT",
+    "signal_level": 2,
+    "win_probability": 0.62,
+    "trigger": "Failed breakout above resistance R=81500 (high 81594, close 81544) followed by close back below resistance",
+    "invalidation": "Price reclaims resistance above 81500",
+    "setup_tag": "FAILED_BREAKOUT",
+    "created_at": "2026-10-29T15:05:09.868494+00:00"
+  },
   "position": null,
   "closed_trades": [
     {
