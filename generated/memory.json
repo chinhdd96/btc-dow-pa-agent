@@ -116,6 +116,18 @@
         "close_reason": "SL",
         "last_pnl": -4.0671,
         "last_r": -1.0000105727556805
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Setup bán dựa trên failed breakout đã được thực hiện đúng, mức SL và TP hợp lý, R:R 1, và giá đã di chuyển tới mức hỗ trợ, đạt TP.",
+        "actionable_rule": "Khi giá phá mức kháng cự nhưng không duy trì (failed breakout) và xuất hiện sweep high back, mở lệnh bán với SL đặt trên mức kháng cự và TP ở mức hỗ trợ tiếp theo, đảm bảo R:R ≥1.2.",
+        "weight": 2,
+        "evidence_n": 1,
+        "classification": "GOOD_EDGE",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "TP",
+        "last_pnl": 3.6041,
+        "last_r": 4.4924226748867575
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
