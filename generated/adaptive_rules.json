@@ -1,16 +1,17 @@
 {
   "version": 2,
   "stable": false,
-  "updated_at": "2026-10-29T02:05:19.071785+00:00",
-  "closes_at_review": 25,
+  "updated_at": "2026-10-29T16:05:22.556333+00:00",
+  "closes_at_review": 26,
   "freeze": false,
   "rules": [
     {
       "id": "auto_div_FAILED_BREAK",
       "when": "setup_tag=='FAILED_BREAKOUT'",
       "action": "PREFER_ALT",
-      "effect": "PREFER_ALT",
+      "reason": "Auto: FAILED_BREAKOUT expectancy âm — ép đa dạng setup",
       "when_setup": "FAILED_BREAKOUT",
+      "effect": "PREFER_ALT",
       "magnitude": 1.0,
       "prefer_tags": [
         "PULLBACK",
@@ -18,10 +19,10 @@
         "BREAKOUT",
         "SWEEP"
       ],
-      "reason": "Auto: FAILED_BREAKOUT expectancy âm — ép đa dạng setup",
-      "evidence_n": 22,
+      "evidence_n": 45,
       "weight": 3,
-      "created_at_closes": 25
+      "created_at_closes": 25,
+      "pnl_since": 0.0
     },
     {
       "id": "r6208",
@@ -53,6 +54,6 @@
     }
   ],
   "from_replay": true,
-  "last_summary": "Các rule tập trung vào việc tăng điểm cho các setup có expectancy dương (BREAKDOWN, SWEEP), hạn chế việc vào lệnh SELL trên FAILED_BREAKOUT bằng FORBID_SOFT và ưu tiên chuyển sang các setup tích cực hơn bằng PREFER_ALT. Đồng thời, checklist đảm bảo stop loss luôn đặt trên mức vào lệnh cho SELL, và rule trailing BE giúp cải thiện win rate khi WR < 50%. Nhờ các điều chỉnh này, kỳ vọng lợi nhuận và P",
+  "last_summary": "meta_review error: No JSON object found in LLM response: '{\\n  \"rules\": [\\n    {\\n      \"when_setup\": \"FAILED_BREAKOUT\",\\n      \"effect\": \"PREFER_ALT\",\\n      \"magnitude\": 1.5,\\n      \"prefer_tags\": [\"PULLBACK\", \"RETEST\", \"BREAKOUT\", \"SWEEP\"],\\n      \"when\": \"exp<0\",\\n      \"action\": \"ENTER\",\\n      \"reaso'",
   "killed": []
 }
