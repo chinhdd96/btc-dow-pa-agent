@@ -342,6 +342,7 @@ class PaperPortfolio:
         trigger: str = "",
         invalidation: str = "",
         setup_tag: str = "",
+        hyp_ids_at_entry: list[str] | None = None,
     ) -> dict[str, Any]:
         """Đăng ký lệnh paper. MARKET khớp ngay nếu giá đã chạm entry; LIMIT chờ."""
         action = action.upper()
@@ -378,6 +379,7 @@ class PaperPortfolio:
             "trigger": trigger,
             "invalidation": invalidation,
             "setup_tag": setup_tag,
+            "hyp_ids_at_entry": list(hyp_ids_at_entry or []),
             "created_at": _now_iso(),
         }
         data["pending"] = pending
@@ -766,6 +768,7 @@ class PaperPortfolio:
             "setup_tag": position.get("setup_tag") or "",
             "trigger": position.get("trigger") or "",
             "initial_r": position.get("initial_r"),
+            "hyp_ids_at_entry": list(position.get("hyp_ids_at_entry") or []),
             "opened_at": position.get("filled_at"),
             "closed_at": _now_iso(),
         }
