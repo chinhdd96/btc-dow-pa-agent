@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-30T16:35:19.675585+00:00",
+  "updated_at": "2026-10-30T16:35:26.380141+00:00",
   "migrated_from_adaptive": false,
   "hypotheses": [
     {
@@ -21,6 +21,26 @@
       "status": "active",
       "created_at_closes": 25,
       "evidence_n": 69,
+      "eval_trades": 0,
+      "pnl_attributed": 0.0,
+      "blocks_count": 0,
+      "entries_while_active": 0,
+      "overrides_count": 0,
+      "last_verdict_at_closes": null
+    },
+    {
+      "id": "r6208",
+      "when_setup": "BREAKDOWN",
+      "when_extra": "exp0.5",
+      "effect": "RAISE_SCORE",
+      "magnitude": 1.5,
+      "prefer_tags": [],
+      "reason": "HIGH_EXP",
+      "origin": "migrate",
+      "origin_classification": "",
+      "status": "active",
+      "created_at_closes": 25,
+      "evidence_n": 2,
       "eval_trades": 0,
       "pnl_attributed": 0.0,
       "blocks_count": 0,
