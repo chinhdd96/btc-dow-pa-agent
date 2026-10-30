@@ -104,7 +104,7 @@ MANAGE_DEEP_LOSS_R = float(os.getenv("MANAGE_DEEP_LOSS_R", "0.5"))
 MANAGE_CLOSE_MIN_SCORE = float(os.getenv("MANAGE_CLOSE_MIN_SCORE", "4.5"))
 # Idle quá lâu → nới nhẹ để không đứng ngoài mãi
 ZERO_TRADE_HOURS = float(os.getenv("ZERO_TRADE_HOURS", "12"))
-TRADE_STATS_MAX_CHARS = int(os.getenv("TRADE_STATS_MAX_CHARS", "600"))
+TRADE_STATS_MAX_CHARS = int(os.getenv("TRADE_STATS_MAX_CHARS", "1200"))
 ADAPTIVE_RULES_MAX = int(os.getenv("ADAPTIVE_RULES_MAX", "12"))
 # Diversity / streak when bleeding same setup
 SETUP_STREAK_LEN = int(os.getenv("SETUP_STREAK_LEN", "3"))
@@ -113,6 +113,18 @@ DIVERSITY_AFTER_STREAK = int(os.getenv("DIVERSITY_AFTER_STREAK", "3"))
 DIVERSITY_SCORE_BONUS = float(os.getenv("DIVERSITY_SCORE_BONUS", "1.0"))
 # Kill adaptive rules that fail after enough closes
 RULE_KILL_MIN_TRADES = int(os.getenv("RULE_KILL_MIN_TRADES", "6"))
+
+# Pole-3: AI-owned hypotheses (mechanism only — no setup blacklist)
+HYP_MAX_ACTIVE = int(os.getenv("HYP_MAX_ACTIVE", "12"))
+HYP_MIN_EVAL = int(os.getenv("HYP_MIN_EVAL", "6"))
+HYP_MAG_STEP = float(os.getenv("HYP_MAG_STEP", "0.25"))
+HYP_AVOID_HOLD_MAG = float(os.getenv("HYP_AVOID_HOLD_MAG", "2.0"))
+HYP_AVOID_HOLD_EVIDENCE = int(os.getenv("HYP_AVOID_HOLD_EVIDENCE", "3"))
+HYP_OVERRIDE_RR_BONUS = float(os.getenv("HYP_OVERRIDE_RR_BONUS", "0.5"))
+HYP_META_EVERY_N = int(os.getenv("HYP_META_EVERY_N", "10"))
+HYPOTHESES_GITHUB_PATH = os.getenv(
+    "HYPOTHESES_GITHUB_PATH", "generated/hypotheses.json"
+).strip()
 
 # Historical replay: on start → 30d backtest then live (skip if done marker unless FORCE)
 REPLAY_ON_START = os.getenv("REPLAY_ON_START", "true").strip().lower() in {
@@ -198,7 +210,7 @@ LLM_MODEL = (
     or "openai/gpt-oss-120b"
 )
 # Prompt size — Groq TPM ~8k tokens: ưu tiên structure + core; CSV mỏng
-CORE_PLAYBOOK_MAX_CHARS = int(os.getenv("CORE_PLAYBOOK_MAX_CHARS", "3800"))
+CORE_PLAYBOOK_MAX_CHARS = int(os.getenv("CORE_PLAYBOOK_MAX_CHARS", "2200"))
 DAILY_PLAYBOOK_MAX_CHARS = int(os.getenv("DAILY_PLAYBOOK_MAX_CHARS", "1500"))
 MEMORY_LESSONS_MAX_CHARS = int(os.getenv("MEMORY_LESSONS_MAX_CHARS", "900"))
 NEWS_SUMMARY_MAX_CHARS = int(os.getenv("NEWS_SUMMARY_MAX_CHARS", "500"))
@@ -229,6 +241,7 @@ PATHS = {
     "PAPER_ACCOUNT": str(BASE_DIR / "generated" / "paper_account.json"),
     "DECISION_HISTORY": str(BASE_DIR / "generated" / "decision_history.jsonl"),
     "ADAPTIVE_RULES": str(BASE_DIR / "generated" / "adaptive_rules.json"),
+    "HYPOTHESES": str(BASE_DIR / "generated" / "hypotheses.json"),
     "REPLAY_SUMMARY": str(BASE_DIR / "generated" / "replay" / "summary.json"),
     "REPLAY_DONE": str(BASE_DIR / "generated" / "replay" / "done.json"),
 }
