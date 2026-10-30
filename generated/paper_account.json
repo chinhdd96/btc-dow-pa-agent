@@ -4,7 +4,8 @@
   "balance": 998.0592542176921,
   "margin_per_trade": 100.0,
   "leverage": 3,
-  "pending": {
+  "pending": null,
+  "position": {
     "action": "BUY",
     "entry": 78450.0,
     "stop_loss": 77700.0,
@@ -23,9 +24,11 @@
     "trigger": "Low sweep: candle with long lower shadow down to ~78210 and close above the low (~78820), confirming buying pressure",
     "invalidation": "Close below the sweep low (~78200) or break of the recent support S≈77765",
     "setup_tag": "FAILED_BREAKOUT",
-    "created_at": "2026-10-30T05:05:10.873274+00:00"
+    "created_at": "2026-10-30T05:05:10.873274+00:00",
+    "filled_at": "2026-10-30T05:05:12.951181+00:00",
+    "fill_price": 78450.0,
+    "stop_armed": true
   },
-  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
