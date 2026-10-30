@@ -24,6 +24,7 @@ from modules.binance_client import BinanceClient, BinanceClientError
 from modules import adaptive_rules
 from modules import candle_store
 from modules import decision_history
+from modules import hypothesis_store
 from modules.learner_crawler import run_learner_crawler
 from modules.llm_agent import LLMAgent
 from modules import memory_manager as memory_manager_mod
@@ -221,24 +222,54 @@ def validate_decision_hard(
     if div_pen > 0:
         req_score += div_pen
 
-    # APPLY adaptive rules (RAISE_SCORE / FORBID_SOFT / PREFER_ALT)
-    rules_data = adaptive_rules.load_rules()
-    rule_extra, rule_notes, prefer_tags = adaptive_rules.apply_rules_to_score(
-        list(rules_data.get("rules") or []), setup_tag
+    # Provisional R:R for hypothesis override (L3 + RR)
+    entry = decision.get("entry_price")
+    sl = decision.get("stop_loss_price")
+    tp = decision.get("take_profit_price")
+    try:
+        mark = binance.get_mark_price()
+    except BinanceClientError:
+        mark = float(entry or 0)
+    use_entry = float(entry) if entry else mark
+    provisional_rr = None
+    try:
+        if sl is not None and tp is not None:
+            risk = abs(use_entry - float(sl))
+            reward = abs(float(tp) - use_entry)
+            if risk > 0:
+                provisional_rr = reward / risk
+    except (TypeError, ValueError):
+        provisional_rr = None
+
+    # Pole-3: APPLY AI hypotheses (single behavior source)
+    hyp_res = hypothesis_store.apply_to_decision(
+        setup_tag,
+        signal_level=signal_level,
+        risk_reward=provisional_rr,
+        allow_l2_relief=allow_l2_relief,
     )
-    if rule_extra > 0:
-        req_score += rule_extra
+    req_score += float(hyp_res.get("extra_score") or 0)
+    prefer_tags = list(hyp_res.get("prefer_tags") or [])
+    hyp_notes = list(hyp_res.get("notes") or [])
+    decision = dict(decision)
+    decision["hyp_ids_applied"] = list(hyp_res.get("hyp_ids_applied") or [])
+    decision["blocked_by_hyp"] = hyp_res.get("blocked_by_hyp")
+
+    if hyp_res.get("blocked_by_hyp") and hyp_res.get("hold_reason"):
+        hypothesis_store.record_block(str(hyp_res["blocked_by_hyp"]))
+        decision["action"] = "HOLD"
+        reason = str(hyp_res["hold_reason"])
+        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
+        return decision, reason
 
     chop_fb = trade_analytics.is_chop_failed_breakout(decision, bias)
     if chop_fb:
         req_score = max(req_score, config.BASE_MIN_SCORE + config.ADAPTIVE_CHOP_BONUS)
-        # Mặc định KHÔNG bắt L3 — vẫn cho L2 vào lệnh để học mẫu
         if (
             getattr(config, "CHOP_REQUIRE_L3", False)
             and signal_level < 3
             and not allow_l2_relief
         ):
-            decision = dict(decision)
             decision["action"] = "HOLD"
             reason = (
                 f"Chặn chop/FB: cần signal_level≥3 (got {signal_level}) "
@@ -247,61 +278,41 @@ def validate_decision_hard(
             decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
             return decision, reason
     if allow_l2_relief:
-        # Idle quá lâu: nới về BASE để không đứng ngoài mãi
+        # Idle: nới điểm BASE — không xóa / bỏ qua AVOID hyp (đã xử lý ở trên)
         req_score = min(req_score, config.BASE_MIN_SCORE)
 
-    notes = [n for n in (soft_note, div_note, *rule_notes) if n]
+    notes = [n for n in (soft_note, div_note, *hyp_notes) if n]
     if prefer_tags:
         notes.append(f"PREFER_ALT tags={prefer_tags}")
     if notes:
-        decision = dict(decision)
         decision["reasoning"] = f"{'; '.join(notes)}. {decision.get('reasoning', '')}"
 
     if score < req_score:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         reason = f"Chặn cứng: điểm {score} < ngưỡng {req_score}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
-    entry = decision.get("entry_price")
-    sl = decision.get("stop_loss_price")
-    tp = decision.get("take_profit_price")
-    if entry is None:
-        entry = None  # will use mark price later
-        decision = dict(decision)
-
-    try:
-        mark = binance.get_mark_price()
-    except BinanceClientError:
-        mark = float(entry or 0)
-
-    use_entry = float(entry) if entry else mark
     decision["entry_price"] = use_entry
 
     ok, reason = binance.validate_stop_loss(action, use_entry, sl)
     if not ok:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         decision["reasoning"] = f"Chặn SL: {reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
     if tp is None or float(tp) <= 0:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         reason = "Chặn cứng: thiếu giá chốt lời (TP)"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
 
-    # Directional TP check
     if action == "BUY" and float(tp) <= use_entry:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         reason = "Chặn cứng: BUY thì TP phải > giá vào"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
         return decision, reason
     if action == "SELL" and float(tp) >= use_entry:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         reason = "Chặn cứng: SELL thì TP phải < giá vào"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
@@ -311,7 +322,6 @@ def validate_decision_hard(
     risk = abs(use_entry - float(sl))
     reward = abs(float(tp) - use_entry)
     if risk <= 0 or reward / risk < min_rr:
-        decision = dict(decision)
         decision["action"] = "HOLD"
         reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < {min_rr}"
         decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
@@ -584,126 +594,90 @@ def maybe_run_meta_review(
     notifier: Notifier,
     paper: PaperPortfolio,
 ) -> None:
-    """Run adaptive-rules meta-review every N closes when not yet profitable/stable."""
+    """Pole-3 meta: AI keep/kill/revise/revoke hypotheses every HYP_META_EVERY_N closes."""
     trades = paper.closed_trades()
     n = len(trades)
-    if n < config.META_REVIEW_EVERY_N_CLOSES:
+    every = int(getattr(config, "HYP_META_EVERY_N", 10) or 10)
+    if n < every:
         return
     state = _load_state()
     last_n = int(state.get("meta_review_at_closes") or 0)
-    if n - last_n < config.META_REVIEW_EVERY_N_CLOSES:
-        # Also allow daily: if last review > 24h ago and expectancy bad
+    if n - last_n < every:
         last_ts = state.get("meta_review_at")
         hours = trade_analytics.hours_since_iso(last_ts) if last_ts else None
         if hours is None or hours < 24:
             return
-    rules_data = adaptive_rules.load_rules()
     stats = trade_analytics.summarize_trades(trades)
-    if rules_data.get("stable") and stats.get("stable"):
+    hyps = hypothesis_store.active_hypotheses()
+    if not hyps and stats.get("stable"):
         state["meta_review_at_closes"] = n
         state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
         _save_state(state)
         return
-    if rules_data.get("freeze") and stats.get("expectancy", 0) < 0 and stats.get("pnl", 0) < 0:
-        logger.info("meta_review freeze active — skip propose")
-        return
-    # Only review when underperforming
     need = (
         stats.get("expectancy", 0) < 0
         or stats.get("pnl", 0) < 0
         or stats.get("quality_wr", 0) < config.META_REVIEW_TARGET_QUALITY_WR
+        or bool(hyps)
     )
-    if not need and stats.get("stable"):
-        rules_data["stable"] = True
-        adaptive_rules.save_rules(rules_data)
-        notifier.send(
-            f"Meta-review: STABLE mode (exp={stats['expectancy']:+.3f} "
-            f"pnl={stats['pnl']:+.2f} qWR={stats['quality_wr']*100:.0f}%)"
-        )
-        state["meta_review_at_closes"] = n
-        state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
-        _save_state(state)
-        return
     if not need:
         return
 
     stats_txt = trade_analytics.format_stats_for_prompt(trades)
     lose_tags = adaptive_rules.losing_setup_tags(trades)
+    hyp_txt = hypothesis_store.format_for_prompt(max_chars=1200)
     proposed = llm.run_meta_review(
         trades=trades,
         lessons_summary=memory.get_all_lessons_summary(),
-        current_rules=list(rules_data.get("rules") or []),
+        current_rules=hyps,
         stats_text=stats_txt,
         losing_tags=sorted(lose_tags),
+        hypotheses=hyps,
+        hyp_meta_text=hyp_txt,
     )
-    incoming = adaptive_rules.validate_and_normalize(
-        proposed, losing_tags=lose_tags, closes_now=n
-    )
-    # Ensure at least one PREFER_ALT / FORBID_SOFT when bleeding tags exist
+    actions = list(proposed.get("actions") or [])
+    # Soft pressure: if bleeding tag and no AVOID/PREFER active, seed one PREFER_ALT
     has_pressure = any(
-        str(r.get("effect") or "") in {"PREFER_ALT", "FORBID_SOFT"}
-        for r in incoming
+        str(h.get("effect") or "") in {"PREFER_ALT", "AVOID_SOFT"}
+        and str(h.get("status")) == "active"
+        for h in hyps
     )
     if lose_tags and not has_pressure:
         top = sorted(
             lose_tags,
             key=lambda t: trade_analytics.setup_expectancy(trades, t).get("pnl", 0),
         )[0]
-        incoming.append(
+        seeded = hypothesis_store.upsert_hypothesis(
             {
-                "id": f"auto_div_{top[:12]}",
-                "when": f"setup_tag=='{top}'",
-                "action": "PREFER_ALT",
-                "effect": "PREFER_ALT",
+                "id": f"h_prefer_alt_{top[:12].lower()}",
                 "when_setup": top,
+                "effect": "PREFER_ALT",
                 "magnitude": 1.0,
-                "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP"],
-                "reason": f"Auto: {top} expectancy âm — ép đa dạng setup",
-                "evidence_n": trade_analytics.setup_expectancy(trades, top)["n"],
-                "weight": 3,
-                "created_at_closes": n,
-            }
+                "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP", "BREAKDOWN"],
+                "reason": f"Meta seed: {top} expectancy âm — ép đa dạng setup",
+            },
+            classification="BAD_SETUP",
+            closes_now=n,
+            origin="meta",
         )
-    if rules_data.get("stable"):
-        merged = adaptive_rules.merge_rules(
-            list(rules_data.get("rules") or []), incoming[:3]
-        )
-    else:
-        merged = adaptive_rules.merge_rules(
-            list(rules_data.get("rules") or []), incoming
-        )
-    merged, killed = adaptive_rules.kill_failed_rules(
-        merged, trades, closes_now=n
-    )
+        if seeded:
+            actions.append(
+                {
+                    "id": seeded.get("id"),
+                    "verdict": "keep",
+                    "reason": "auto seed PREFER_ALT",
+                }
+            )
 
-    fail_streak = int(state.get("meta_review_fail_streak") or 0)
-    if stats.get("expectancy", 0) < 0 and stats.get("pnl", 0) < 0:
-        fail_streak += 1
-    else:
-        fail_streak = 0
-    freeze = fail_streak >= 2
-    rules_data.update(
-        {
-            "rules": merged,
-            "stable": bool(stats.get("stable")),
-            "freeze": freeze,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "closes_at_review": n,
-            "last_summary": str(proposed.get("summary") or "")[:400],
-            "killed": killed[-8:],
-        }
-    )
-    adaptive_rules.save_rules(rules_data)
+    applied = hypothesis_store.apply_meta_actions(actions, closes_now=n)
     state["meta_review_at_closes"] = n
     state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
-    state["meta_review_fail_streak"] = fail_streak
     _save_state(state)
-    kill_txt = f" killed={killed}" if killed else ""
     notifier.send(
-        "Meta-review adaptive_rules\n"
+        "Meta-review hypotheses\n"
         f"n={n} exp={stats['expectancy']:+.3f} pnl={stats['pnl']:+.2f} "
-        f"qWR={stats['quality_wr']*100:.0f}% rules={len(merged)} "
-        f"stable={rules_data['stable']} freeze={freeze}{kill_txt}\n"
+        f"qWR={stats['quality_wr']*100:.0f}% active={len(hypothesis_store.active_hypotheses())}\n"
+        f"actions={applied or '(none)'}\n"
         f"losing_tags={sorted(lose_tags)}\n"
         f"{(proposed.get('summary') or '')[:300]}"
     )
@@ -794,6 +768,47 @@ def handle_paper_closed(
         pnl=pnl,
         r_multiple=r_mult,
     )
+
+    # Pole-3: upsert hypothesis + credit eval on related hyps
+    n_closes = len(closed_all)
+    hyp_raw = lesson.get("hypothesis")
+    if hyp_raw is None and hypothesis_store.hypothesis_required(classification):
+        # Mandatory fallback from actionable_rule / setup
+        effect = "CHECKLIST" if classification == "PROCESS_ERROR" else "AVOID_SOFT"
+        if classification == "VALID_LOSS":
+            effect = "RAISE_SCORE"
+        hyp_raw = {
+            "when_setup": setup_tag or "UNKNOWN",
+            "effect": effect,
+            "magnitude": 1.0,
+            "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP", "BREAKDOWN"],
+            "reason": str(lesson.get("actionable_rule") or lesson.get("mistake_or_insight") or "")[
+                :240
+            ],
+        }
+    upserted = None
+    try:
+        if hyp_raw is not None:
+            upserted = hypothesis_store.upsert_hypothesis(
+                hyp_raw,
+                classification=classification,
+                closes_now=n_closes,
+                origin="post_mortem",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hypothesis upsert failed: %s", exc)
+    try:
+        credit = hypothesis_store.credit_close(
+            setup_tag,
+            pnl,
+            hyp_ids_at_entry=list(trade.get("hyp_ids_at_entry") or []),
+            closes_now=n_closes,
+        )
+        if credit:
+            logger.info("hypothesis credit: %s", credit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hypothesis credit failed: %s", exc)
+
     stats = memory.resync_stats_from_trades(closed_all)
     notifier.notify_post_mortem(lesson, result, pnl)
     result_vi = "THẮNG" if str(result).upper() == "WIN" else "THUA"
@@ -804,6 +819,7 @@ def handle_paper_closed(
         f"PAPER ĐÓNG LỆNH [{closed_event.get('reason')}] {result_vi} "
         f"PnL={pnl:+.4f}u\n"
         f"{line}\n"
+        f"{hypothesis_store.telegram_line(upserted)}\n"
         f"{_paper_status_text(paper)}\n"
         f"điểm tối thiểu (memory)={stats.get('current_min_score')}"
     )
@@ -1062,6 +1078,7 @@ def job_trade(
                     decision.get("setup_tag")
                     or trade_analytics.setup_tag_from_decision(decision)
                 ),
+                hyp_ids_at_entry=list(decision.get("hyp_ids_applied") or []),
             )
             if placed.get("ok"):
                 state["last_entry_at"] = datetime.now(timezone.utc).isoformat()
@@ -1289,6 +1306,17 @@ def main() -> None:
             logger.info("Restored adaptive_rules from remote")
     except Exception as exc:  # noqa: BLE001
         logger.warning("adaptive_rules restore skipped: %s", exc)
+    try:
+        if hypothesis_store.restore_from_remote():
+            logger.info("Restored hypotheses from remote")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hypotheses restore skipped: %s", exc)
+    try:
+        n_mig = hypothesis_store.migrate_from_adaptive_rules()
+        if n_mig:
+            logger.info("Migrated %d adaptive rules → hypotheses", n_mig)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hypothesis migrate skipped: %s", exc)
     memory = MemoryManager()
     llm = LLMAgent()
     notifier = Notifier()
