@@ -40,7 +40,7 @@ SỨ MỆNH TỐI THƯỢNG — AUTONOMOUS PROFIT-SEEKING AGENT:
 
 NHIỆM VỤ DUY NHẤT là tìm mọi phương pháp giao dịch HỢP LỆ để tạo lợi nhuận ròng dương, tối đa hóa kỳ vọng lợi nhuận dài hạn sau chi phí và kiểm soát sụt giảm vốn. Không có lời hứa chắc chắn thắng từng lệnh; không được đánh đổi an toàn để làm đẹp số lượng lệnh.
 
-Bạn là AI TRADER chủ động săn lợi nhuận, KHÔNG phải AI chỉ phân tích rồi mặc định HOLD. Mỗi lần chạy là một vòng lặp tiếp nối: KẾ THỪA MEMORY + TRADE_STATS + ADAPTIVE RULES + HISTORY → ĐÁNH GIÁ HIỆU QUẢ → SĂN BUY/SELL → CHỌN SETUP → ĐỀ XUẤT LỆNH → TẠO CƠ SỞ CHO CHU KỲ HỌC TIẾP THEO.
+Bạn là AI TRADER chủ động săn lợi nhuận, KHÔNG phải AI chỉ phân tích rồi mặc định HOLD. Mỗi lần chạy là một vòng lặp tiếp nối: KẾ THỪA TRADE_STATS + ACTIVE HYPOTHESES + MEMORY + HISTORY → ĐÁNH GIÁ HIỆU QUẢ → SĂN BUY/SELL → CHỌN SETUP → ĐỀ XUẤT LỆNH → TẠO CƠ SỞ CHO CHU KỲ HỌC TIẾP THEO.
 
 MỆNH LỆNH HÀNH ĐỘNG:
 1. BẮT BUỘC săn cả BUY và SELL trên mọi khung được cung cấp. 1W/1D là bối cảnh; 4H/1H là cấu trúc; ZOOM là trigger. Không đòi tất cả khung đồng thuận. Cho phép giao dịch ngược xu hướng khung lớn nếu thesis ngắn hạn và invalidation rõ ràng.
@@ -87,7 +87,7 @@ DỮ LIỆU:
 
 
 
-2b. ADAPTIVE RULES (từ meta-review; không được bỏ qua nếu khớp WHEN)
+2b. ACTIVE HYPOTHESES (do chính bạn tạo — Python APPLY; phải tôn trọng)
 
 ---
 
@@ -107,7 +107,7 @@ DỮ LIỆU:
 
 Chỉ tham khảo. Số liệu live + trade_flags luôn ưu tiên hơn history.
 
-Nếu TRADE_STATS cho thấy setup có expectancy âm → ưu tiên tìm setup/khung khác (continuation, pullback, breakout thật, retest…), nhưng KHÔNG được đứng ngoài toàn thị trường. Vẫn được đề xuất L2+ nếu có trigger, invalidation, TP thực tế và R:R hợp lệ — hệ thống Python chỉ nâng ngưỡng điểm (soft), không cấm cứng. Mục tiêu: vào lệnh có chất lượng để học, không HOLD kéo dài.
+Nếu TRADE_STATS cho thấy setup có expectancy âm → ưu tiên tìm setup/khung khác (continuation, pullback, breakout thật, retest…), nhưng KHÔNG được đứng ngoài toàn thị trường. Vẫn được đề xuất L2+ nếu có trigger, invalidation, TP thực tế và R:R hợp lệ — hypothesis AVOID đủ mag+evidence có thể HOLD setup đó; đổi setup/TF hoặc L3+RR override (đã audit) — không bỏ qua hyp lặng lẽ. Mục tiêu: vào lệnh có chất lượng để học, không HOLD kéo dài.
 
 
 
@@ -249,7 +249,11 @@ FORMAT:
 
   "risk_reward_ratio": 2.4,
 
-  "reasoning": "Lý do BUY/SELL/HOLD"
+  "reasoning": "Lý do BUY/SELL/HOLD",
+
+  "respected_hypotheses": [],
+
+  "overridden_hypotheses": []
 
 }}
 
@@ -537,23 +541,20 @@ NHIỆM VỤ:
 
    CẤM gắn GOOD_EDGE cho thắng nhỏ do trail/SL scrape.
 
-4. Rút ra tối đa 01 actionable_rule ngắn gọn, có thể kiểm chứng ở các giao dịch sau; ưu tiên cải thiện expectancy/PnL thay vì tối đa hóa win rate.
+4. Rút ra tối đa 01 actionable_rule ngắn gọn (TIẾNG VIỆT), kiểm chứng được; ưu tiên expectancy/PnL.
 
-5. Không được suy ra một quy tắc phổ quát chỉ từ một lệnh thắng/thua.
+5. HYPOTHESIS (cực 3 — hành vi thật do Python APPLY):
+   - BẮT BUỘC object hypothesis khi classification ∈ BAD_SETUP|VALID_LOSS|PROCESS_ERROR.
+   - Được null chỉ với GOOD_EDGE|INSUFFICIENT_EVIDENCE|VALID_WIN.
+   - GOOD_EDGE CẤM effect AVOID_SOFT.
+   - PROCESS_ERROR ưu tiên effect CHECKLIST (không AVOID cả setup trừ force_avoid).
+   - Schema: when_setup (TAG), effect ∈ RAISE_SCORE|AVOID_SOFT|PREFER_ALT|CHECKLIST,
+     magnitude≈1.0, prefer_tags (khi PREFER_ALT), reason TIẾNG VIỆT.
+   - Tối đa 1 hyp / lệnh đóng (hoặc +evidence hyp cũ cùng when_setup+effect).
 
-6. Nếu bài học mới chỉ là giả thuyết, ghi rõ cần kiểm chứng thêm; không biến nó thành quy tắc bắt buộc ngay. Mỗi lệnh paper là một mẫu học tập, không được hứa rằng các lệnh sau chắc chắn có lợi nhuận.
+6. Không suy quy luật phổ quát từ 1 lệnh; không bịa tin tức ngoài dữ liệu.
 
-7. Không bịa dữ liệu, xác suất thắng hoặc nguyên nhân như tin tức nếu đầu vào không có bằng chứng.
-
-8. Weight là mức ưu tiên tham khảo từ 1–3:
-
-   - 1: giả thuyết từ một lệnh, cần kiểm chứng.
-
-   - 2: bài học có bằng chứng tương đối rõ nhưng cần thêm mẫu.
-
-   - 3: lỗi quy trình rõ ràng hoặc quy tắc đã được kiểm chứng độc lập.
-
-   Không tự nâng weight chỉ vì lệnh có PnL lớn.
+7. Weight 1–3: 1=giả thuyết; 2=có bằng chứng tương đối; 3=PROCESS_ERROR rõ / đã kiểm chứng.
 
 
 
@@ -577,7 +578,9 @@ FORMAT:
 
   "actionable_rule": "Giả thuyết cần kiểm chứng hoặc quy tắc được hỗ trợ bởi dữ liệu.",
 
-  "weight": 1
+  "weight": 1,
+
+  "hypothesis": null
 
 }}
 
@@ -2123,7 +2126,7 @@ class LLMAgent:
 
             "Săn cơ hội vào lệnh có chất lượng (L2+) để học; CẤM đứng ngoài mãi vì 1 setup xấu. "
 
-            "Tôn trọng TRADE_STATS và ADAPTIVE RULES: setup expectancy âm → đổi setup/TF, không HOLD toàn thị trường. "
+            "Tôn trọng TRADE_STATS và ACTIVE HYPOTHESES (do bạn tạo): setup bị AVOID đủ evidence → đổi setup/TF; không bỏ qua hyp; không HOLD toàn thị trường. "
 
             "Dow/PA là nền tảng. RANGE trade ở biên hoặc TF nhỏ nếu có trigger+invalidation+R:R. "
 
@@ -2555,9 +2558,13 @@ class LLMAgent:
 
         losing_tags: list[str] | None = None,
 
+        hypotheses: list[dict[str, Any]] | None = None,
+
+        hyp_meta_text: str = "",
+
     ) -> dict[str, Any]:
 
-        """Propose APPLY adaptive_rules focused on expectancy/PnL (not raw WR)."""
+        """Propose keep/kill/revise/revoke on AI hypotheses (pole-3)."""
 
         slim_trades = []
 
@@ -2585,37 +2592,29 @@ class LLMAgent:
 
         lose = sorted({str(x).upper() for x in (losing_tags or [])})
 
+        hyps = hypotheses if hypotheses is not None else current_rules
+
         prompt = (
 
             "Bạn là Risk Officer tối ưu LỢI NHUẬN paper BTC.\n"
 
-            "Nhiệm vụ: cải thiện expectancy/PnL. CẤM trail BE để tăng WR.\n"
+            "Nhiệm vụ: review ACTIVE HYPOTHESES (cực 3). CẤM blacklist setup cứng ngoài hyp.\n"
 
-            "Xuất ≤8 adaptive rules theo schema APPLY:\n"
+            "Xuất actions ≤8: {id, verdict: keep|kill|revise|revoke, reason, new_fields?}.\n"
 
-            "  when_setup: TAG hoặc *\n"
+            "revoke chỉ khi idle quá lâu vì AVOID hàng loạt và nêu rõ lý do.\n"
 
-            "  effect: RAISE_SCORE | FORBID_SOFT | PREFER_ALT | CHECKLIST\n"
+            "revise được đổi magnitude/prefer_tags/effect.\n"
 
-            "  magnitude: điểm cộng (0.5–2)\n"
+            f"Losing setups: {lose or '(không)'}\n"
 
-            "  prefer_tags: list khi PREFER_ALT\n"
-
-            "  when, action, reason, evidence_n, weight 1–3\n"
-
-            f"Losing setups (CẤM đề xuất ENTER cùng tag): {lose or '(không)'}\n"
-
-            "Nếu có losing setup: BẮT BUỘC ≥1 rule PREFER_ALT hoặc FORBID_SOFT.\n"
-
-            "CẤM rule kiểu action==SELL trần hoặc ENTER SELL FAILED_BREAKOUT.\n"
-
-            "Trả về 1 JSON: {\"rules\":[...], \"summary\":\"...\"}. Không markdown.\n\n"
+            "Trả về 1 JSON: {\"actions\":[...], \"summary\":\"...\"}. Không markdown.\n\n"
 
             f"TRADE_STATS:\n{stats_text}\n\n"
 
-            f"LESSONS:\n{lessons_summary or '(không có)'}\n\n"
+            f"HYP_TABLE:\n{hyp_meta_text or json.dumps(hyps, ensure_ascii=False)}\n\n"
 
-            f"CURRENT_RULES:\n{json.dumps(current_rules, ensure_ascii=False)}\n\n"
+            f"LESSONS:\n{lessons_summary or '(không có)'}\n\n"
 
             f"RECENT_TRADES:\n{json.dumps(slim_trades, ensure_ascii=False)}"
 
@@ -2627,9 +2626,9 @@ class LLMAgent:
 
                 system=(
 
-                    "Return only JSON with rules array using effect "
+                    "Return only JSON with actions array: "
 
-                    "RAISE_SCORE|FORBID_SOFT|PREFER_ALT|CHECKLIST. "
+                    "verdict keep|kill|revise|revoke. "
 
                     "Prioritize expectancy and PnL. Vietnamese reason text."
 
@@ -2643,13 +2642,13 @@ class LLMAgent:
 
             data = extract_json_object(raw)
 
-            return data if isinstance(data, dict) else {"rules": [], "summary": ""}
+            return data if isinstance(data, dict) else {"actions": [], "summary": ""}
 
         except Exception as exc:  # noqa: BLE001
 
             logger.exception("meta_review failed: %s", exc)
 
-            return {"rules": [], "summary": f"meta_review error: {exc}"}
+            return {"actions": [], "summary": f"meta_review error: {exc}"}
 
 
 
@@ -2737,7 +2736,7 @@ class LLMAgent:
 
                     "mistake_or_insight và actionable_rule viết TIẾNG VIỆT. "
 
-                    "Không bịa tin tức/nguyên nhân ngoài dữ liệu."
+                    "Không bịa tin tức/nguyên nhân ngoài dữ liệu. BAD_SETUP|VALID_LOSS|PROCESS_ERROR → bắt buộc field hypothesis object; GOOD_EDGE/INSUFFICIENT → hypothesis null được."
 
                 ),
 
@@ -2891,6 +2890,9 @@ class LLMAgent:
 
             weight = max(weight, 3)
 
+        hyp_raw = data.get("hypothesis")
+        if hyp_raw is not None and not isinstance(hyp_raw, dict):
+            hyp_raw = None
         return {
 
             "regime": data.get("regime") or regime,
@@ -2902,6 +2904,8 @@ class LLMAgent:
             "actionable_rule": str(data.get("actionable_rule") or ""),
 
             "weight": weight,
+
+            "hypothesis": hyp_raw,
 
         }
 
