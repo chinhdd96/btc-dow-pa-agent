@@ -21,6 +21,7 @@ import requests
 
 import config
 from modules import adaptive_rules
+from modules import hypothesis_store
 from modules import decision_history
 from modules import trade_analytics
 from modules.binance_client import BinanceClient, BinanceClientError
@@ -252,6 +253,7 @@ def run_replay(
     paper_path = replay_dir / "paper_account.json"
     memory_path = replay_dir / "memory.json"
     rules_path = replay_dir / "adaptive_rules.json"
+    hyp_path = replay_dir / "hypotheses.json"
     hist_path = replay_dir / "decision_history.jsonl"
 
     # Isolate artifacts from live GitHub paper/memory
@@ -273,6 +275,9 @@ def run_replay(
     adaptive_rules.set_remote_backup(False)
     adaptive_rules.set_rules_path(rules_path)
     adaptive_rules.save_rules(dict(adaptive_rules.DEFAULT_RULES))
+    hypothesis_store.set_remote_backup(False)
+    hypothesis_store.set_path(hyp_path)
+    hypothesis_store.save(dict(hypothesis_store.DEFAULT_STORE), backup=False)
 
     # Point decision_history local path for append during replay
     old_hist = config.PATHS.get("DECISION_HISTORY")
@@ -511,6 +516,7 @@ def run_replay(
                             decision.get("setup_tag")
                             or trade_analytics.setup_tag_from_decision(decision)
                         ),
+                        hyp_ids_at_entry=list(decision.get("hyp_ids_applied") or []),
                     )
                 time.sleep(config.REPLAY_LLM_SLEEP_SEC)
         except Exception as exc:  # noqa: BLE001
@@ -596,27 +602,59 @@ def run_replay(
     )
     _backup_replay_summary(summary)
 
-    # Seed live memory / rules
+    # Seed live memory / rules / hypotheses
     seeded_lessons = 0
     seeded_rules = 0
+    seeded_hyps = 0
     adaptive_rules.set_remote_backup(True)
+    hypothesis_store.set_remote_backup(True)
     if config.REPLAY_SEED_MEMORY:
         live_mem = MemoryManager(enable_remote_backup=True)
         seeded_lessons = _merge_lessons(memory, live_mem)
         live_mem.resync_stats_from_trades(closed)
     if config.REPLAY_SEED_RULES:
         seeded_rules = _seed_rules(rules_path)
+    # Merge replay hyps into live store
+    try:
+        replay_hyps = list(hypothesis_store.load().get("hypotheses") or [])
+        hypothesis_store.set_path(None)
+        live = hypothesis_store.load()
+        by_key = {
+            f"{h.get('when_setup')}|{h.get('effect')}": h
+            for h in (live.get("hypotheses") or [])
+            if str(h.get("status")) == "active"
+        }
+        for h in replay_hyps:
+            if str(h.get("status")) != "active":
+                continue
+            key = f"{h.get('when_setup')}|{h.get('effect')}"
+            if key in by_key:
+                cur = by_key[key]
+                cur["evidence_n"] = max(
+                    int(cur.get("evidence_n") or 1), int(h.get("evidence_n") or 1)
+                )
+                cur["magnitude"] = max(
+                    float(cur.get("magnitude") or 1), float(h.get("magnitude") or 1)
+                )
+            else:
+                live.setdefault("hypotheses", []).append(h)
+                seeded_hyps += 1
+        hypothesis_store.save(live)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("replay hyp seed failed: %s", exc)
+        hypothesis_store.set_path(None)
 
     # Restore decision history path
     if old_hist:
         config.PATHS["DECISION_HISTORY"] = old_hist
     adaptive_rules.set_rules_path(None)
+    hypothesis_store.set_path(None)
 
     notifier.send(
         "REPLAY DONE\n"
         f"PnL={summary['pnl']:+.2f}u bal={summary['balance']:.2f}u "
         f"trades={summary['trades']} exp={summary['expectancy']:+.3f}\n"
-        f"seeded lessons={seeded_lessons} rules={seeded_rules}\n"
+        f"seeded lessons={seeded_lessons} rules={seeded_rules} hyps={seeded_hyps}\n"
         f"errors={errors} — live bot continues with seeded memory"
     )
     logger.info("Replay done summary=%s", summary)
