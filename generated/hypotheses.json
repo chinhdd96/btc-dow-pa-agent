@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-30T16:35:26.380141+00:00",
+  "updated_at": "2026-10-30T16:35:31.853431+00:00",
   "migrated_from_adaptive": false,
   "hypotheses": [
     {
@@ -41,6 +41,26 @@
       "status": "active",
       "created_at_closes": 25,
       "evidence_n": 2,
+      "eval_trades": 0,
+      "pnl_attributed": 0.0,
+      "blocks_count": 0,
+      "entries_while_active": 0,
+      "overrides_count": 0,
+      "last_verdict_at_closes": null
+    },
+    {
+      "id": "r7750",
+      "when_setup": "SWEEP",
+      "when_extra": "exp0.2",
+      "effect": "RAISE_SCORE",
+      "magnitude": 1.2,
+      "prefer_tags": [],
+      "reason": "POSITIVE_EXP",
+      "origin": "migrate",
+      "origin_classification": "",
+      "status": "active",
+      "created_at_closes": 25,
+      "evidence_n": 1,
       "eval_trades": 0,
       "pnl_attributed": 0.0,
       "blocks_count": 0,
