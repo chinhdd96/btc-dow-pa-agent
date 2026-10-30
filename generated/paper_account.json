@@ -1,34 +1,11 @@
 {
   "started_at": "2026-10-08T09:34:32.808690+00:00",
   "initial_balance": 1000.0,
-  "balance": 998.0592542176921,
+  "balance": 996.7204396861433,
   "margin_per_trade": 100.0,
   "leverage": 3,
   "pending": null,
-  "position": {
-    "action": "BUY",
-    "entry": 78450.0,
-    "stop_loss": 77700.0,
-    "initial_stop_loss": 77700.0,
-    "initial_r": 2.868069,
-    "take_profit": 80000.0,
-    "margin": 100.0,
-    "leverage": 3,
-    "quantity": 0.0038240917782026767,
-    "notional": 300.0,
-    "order_type": "MARKET",
-    "reasoning": "Soft: FAILED_BREAKOUT exp=-0.209 pnl=-4.82 n=23 → +0.5 điểm; Rule auto_div_FAILED_BREAK: PREFER_ALT ['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP'] thay vì FAILED_BREAKOUT; PREFER_ALT tags=['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP']. Mặc dù trade_stats cho thấy FAILED_BREAKOUT có expectancy âm, adaptive rules ưu tiên chuyển sang các setup khác. Low sweep vừa rồi cung cấp tín hiệu mua (L2) với trigger rõ ràng, invalidation xác định, và R:R  1.2. Giá đang ở vị trí trung bình trong range, gần support, nên một bounce lên mức resistance là khả thi. Nếu giá phá vỡ support dưới 77700 hoặc xuống dưới mức low sweep (~78200) thì lệnh sẽ bị hủy.",
-    "regime": "REGIME_RANGE_SWEEP",
-    "signal_level": 2,
-    "win_probability": 0.62,
-    "trigger": "Low sweep: candle with long lower shadow down to ~78210 and close above the low (~78820), confirming buying pressure",
-    "invalidation": "Close below the sweep low (~78200) or break of the recent support S≈77765",
-    "setup_tag": "FAILED_BREAKOUT",
-    "created_at": "2026-10-30T05:05:10.873274+00:00",
-    "filled_at": "2026-10-30T05:05:12.951181+00:00",
-    "fill_price": 78450.0,
-    "stop_armed": true
-  },
+  "position": null,
   "closed_trades": [
     {
       "action": "SELL",
@@ -527,12 +504,33 @@
       "initial_r": 1.679525,
       "opened_at": "2026-10-29T15:05:12.359247+00:00",
       "closed_at": "2026-10-29T16:05:02.987233+00:00"
+    },
+    {
+      "action": "BUY",
+      "entry": 78450.0,
+      "exit": 78099.9,
+      "sl": 77700.0,
+      "tp": 80000.0,
+      "quantity": 0.0038240917782026767,
+      "margin": 100.0,
+      "pnl": -1.3388,
+      "result": "LOSS",
+      "reason": "MANAGE_CLOSE",
+      "regime": "REGIME_RANGE_SWEEP",
+      "reasoning": "Soft: FAILED_BREAKOUT exp=-0.209 pnl=-4.82 n=23 → +0.5 điểm; Rule auto_div_FAILED_BREAK: PREFER_ALT ['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP'] thay vì FAILED_BREAKOUT; PREFER_ALT tags=['PULLBACK', 'RETEST', 'BREAKOUT', 'SWEEP']. Mặc dù trade_stats cho thấy FAILED_BREAKOUT có expectancy âm, adaptive rules ưu tiên chuyển sang các setup khác. Low sweep vừa rồi cung cấp tín hiệu mua (L2) với trigger rõ ràng, invalidation xác định, và R:R  1.2. Giá đang ở vị trí trung bình trong range, gần support, nên một bounce lên mức resistance là khả thi. Nếu giá phá vỡ support dưới 77700 hoặc xuống dưới mức low sweep (~78200) thì lệnh sẽ bị hủy.",
+      "signal_level": 2,
+      "win_probability": 0.62,
+      "setup_tag": "FAILED_BREAKOUT",
+      "trigger": "Low sweep: candle with long lower shadow down to ~78210 and close above the low (~78820), confirming buying pressure",
+      "initial_r": 2.868069,
+      "opened_at": "2026-10-30T05:05:12.951181+00:00",
+      "closed_at": "2026-10-30T08:05:08.100105+00:00"
     }
   ],
   "stats": {
-    "total_trades": 26,
+    "total_trades": 27,
     "wins": 11,
-    "losses": 15,
-    "realized_pnl": -1.9407457823080858
+    "losses": 16,
+    "realized_pnl": -3.279560313856865
   }
 }
