@@ -1,8 +1,8 @@
 {
   "version": 2,
   "stable": false,
-  "updated_at": "2026-10-29T16:05:22.556333+00:00",
-  "closes_at_review": 26,
+  "updated_at": "2026-10-30T08:05:20.177610+00:00",
+  "closes_at_review": 27,
   "freeze": false,
   "rules": [
     {
@@ -19,7 +19,7 @@
         "BREAKOUT",
         "SWEEP"
       ],
-      "evidence_n": 45,
+      "evidence_n": 69,
       "weight": 3,
       "created_at_closes": 25,
       "pnl_since": 0.0
@@ -54,6 +54,6 @@
     }
   ],
   "from_replay": true,
-  "last_summary": "meta_review error: No JSON object found in LLM response: '{\\n  \"rules\": [\\n    {\\n      \"when_setup\": \"FAILED_BREAKOUT\",\\n      \"effect\": \"PREFER_ALT\",\\n      \"magnitude\": 1.5,\\n      \"prefer_tags\": [\"PULLBACK\", \"RETEST\", \"BREAKOUT\", \"SWEEP\"],\\n      \"when\": \"exp<0\",\\n      \"action\": \"ENTER\",\\n      \"reaso'",
+  "last_summary": "meta_review error: Error code: 429 - Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01m3rpjfq9ev9skfr0yvpk9jes` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 5489, Requested 2585. Please try again in 554.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing",
   "killed": []
 }
