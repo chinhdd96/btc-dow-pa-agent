@@ -403,17 +403,26 @@ def losing_setup_tags(trades: list[dict[str, Any]], min_n: int = 5) -> set[str]:
 
 
 def format_for_prompt(data: dict[str, Any] | None = None, max_chars: int = 700) -> str:
+    """Prefer hypothesis_store (pole-3 single source); fall back to legacy rules."""
+    try:
+        from modules import hypothesis_store
+
+        hyp_txt = hypothesis_store.format_for_prompt(max_chars=max_chars)
+        if hyp_txt and "chưa có hypothesis" not in hyp_txt:
+            return hyp_txt
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hypothesis format fallback: %s", exc)
     data = data if data is not None else load_rules()
     rules = list(data.get("rules") or [])
     if not rules:
-        return "(chưa có adaptive_rules)"
+        return "(chưa có adaptive_rules / hypothesis)"
     flag = []
     if data.get("stable"):
         flag.append("STABLE")
     if data.get("freeze"):
         flag.append("FREEZE")
     head = f"[{'|'.join(flag)}] " if flag else ""
-    lines = [f"{head}Adaptive rules (APPLY — Python gate):"]
+    lines = [f"{head}Adaptive rules (legacy):"]
     for r in rules[: config.ADAPTIVE_RULES_MAX]:
         lines.append(
             f"- [{r.get('id')}|{r.get('effect')}|setup={r.get('when_setup')}|"
