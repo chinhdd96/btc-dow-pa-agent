@@ -140,6 +140,18 @@
         "close_reason": "SL",
         "last_pnl": -1.6795,
         "last_r": -0.999985114839017
+      },
+      {
+        "regime": "REGIME_SIDEWAY_CHOP",
+        "mistake_or_insight": "Lệnh bị đóng do giá phá vỡ mức invalidation (low sweep khoảng 78200) trước khi đạt TP, mặc dù tỷ lệ R:R được thiết lập hợp lý. Điều này cho thấy tín hiệu mua từ low‑sweep trong môi trường range có xác suất thắng không cao và cần thêm xác nhận trước khi vào lệnh.",
+        "actionable_rule": "Trong regime RANGE_SWEEP, yêu cầu xác nhận giá duy trì trên mức low‑sweep ít nhất 2 nến liên tiếp trước khi vào lệnh mua, hoặc điều chỉnh SL sao cho phù hợp với độ biến động ngắn hạn của sweep.",
+        "weight": 1,
+        "evidence_n": 1,
+        "classification": "VALID_LOSS",
+        "setup_tag": "FAILED_BREAKOUT",
+        "close_reason": "MANAGE_CLOSE",
+        "last_pnl": -1.3388,
+        "last_r": -0.46679490625922876
       }
     ],
     "REGIME_HIGH_VOLATILITY_NEWS": []
