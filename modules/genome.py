@@ -258,6 +258,63 @@ def mtf_side_allowed(row: pd.Series, side: Optional[int], enabled: bool) -> bool
     return all(biases) if side == 1 else all(not b for b in biases)
 
 
+def diagnose_entry(
+    row: pd.Series,
+    prev: pd.Series,
+    g: Genome,
+) -> dict:
+    """Short entry decision + reason for Telegram tick notify."""
+    needed = ["atr", "rsi", "ema_fast", "ema_slow", "ema_long", "atr_pct"]
+    if any(pd.isna(row.get(k)) for k in needed):
+        return {"side": None, "action": "SKIP", "why": "thiếu indicator (warm-up)"}
+    if row.atr <= 0:
+        return {"side": None, "action": "SKIP", "why": "ATR không hợp lệ"}
+    if row.atr_pct > g.max_atr_pct:
+        return {
+            "side": None,
+            "action": "SKIP",
+            "why": f"ATR% {row.atr_pct*100:.2f}% > max {g.max_atr_pct*100:.1f}%",
+        }
+    if g.volume_filter and (pd.isna(row.vol_ratio) or row.vol_ratio < g.volume_filter):
+        return {
+            "side": None,
+            "action": "SKIP",
+            "why": f"vol_ratio {float(row.vol_ratio) if pd.notna(row.vol_ratio) else 0:.2f} < {g.volume_filter}",
+        }
+    if g.volatility_mode == "high" and row.atr_pct < 0.015:
+        return {"side": None, "action": "SKIP", "why": "vol mode=high nhưng ATR% thấp"}
+    if g.volatility_mode == "low" and row.atr_pct > 0.015:
+        return {"side": None, "action": "SKIP", "why": "vol mode=low nhưng ATR% cao"}
+
+    side = make_signal(row, prev, g)
+    if side is None:
+        return {
+            "side": None,
+            "action": "SKIP",
+            "why": f"family={g.family}: chưa đủ điều kiện setup",
+        }
+    if not mtf_side_allowed(row, side, g.mtf_filter):
+        direction = "LONG" if side == 1 else "SHORT"
+        if g.mtf_filter:
+            bits = []
+            for label, col in (("1h", "htf1_bull"), ("4h", "htf4_bull"), ("1d", "htf1d_bull")):
+                v = row.get(col, np.nan)
+                if pd.notna(v):
+                    bits.append(f"{label}={'↑' if bool(v) else '↓'}")
+            htf = " ".join(bits) if bits else "thiếu HTF"
+            return {
+                "side": None,
+                "action": "SKIP",
+                "why": f"signal {direction} bị chặn MTF ({htf})",
+            }
+        return {"side": None, "action": "SKIP", "why": "signal bị loại"}
+    return {
+        "side": side,
+        "action": "PENDING",
+        "why": f"signal {'LONG' if side == 1 else 'SHORT'} → chờ fill nến sau",
+    }
+
+
 def genome_from_dict(d: dict) -> Genome | None:
     try:
         g = Genome(**{k: d[k] for k in Genome.__dataclass_fields__ if k in d})

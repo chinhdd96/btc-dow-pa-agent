@@ -163,9 +163,36 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
                 f"genome={pos.get('genome_id')} family={pos.get('family')}"
             )
 
+        def on_tick(report: dict) -> None:
+            # Short per-candle analysis (15m close). OPEN/CLOSE still have dedicated msgs.
+            action = str(report.get("action") or "SKIP")
+            if action in {"OPEN"} or action.startswith("CLOSE_"):
+                return  # avoid duplicate with on_open / on_close
+            close = report.get("close")
+            close_s = f"{float(close):.1f}" if close is not None else "—"
+            atr = report.get("atr_pct")
+            rsi = report.get("rsi")
+            metrics = []
+            if atr is not None:
+                metrics.append(f"ATR%{float(atr)*100:.2f}")
+            if rsi is not None:
+                metrics.append(f"RSI{float(rsi):.0f}")
+            metrics_s = " · ".join(metrics)
+            candle = str(report.get("candle") or "")[-19:]
+            family = report.get("family") or "—"
+            why = str(report.get("why") or "")[:160]
+            lines = [
+                f"15m {candle}",
+                f"close={close_s}" + (f" | {metrics_s}" if metrics_s else ""),
+                f"{action} · {family}",
+                why,
+            ]
+            notifier.send("\n".join(lines))
+
         trader = PaperChampion(
             on_close=lambda t: _handle_closed_trade(t, notifier, memory),
             on_open=on_open,
+            on_tick=on_tick,
         )
         last_seen = trader.state.get("last_candle")
         closed_all: list[dict] = []

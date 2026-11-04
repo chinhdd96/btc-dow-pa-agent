@@ -12,7 +12,7 @@ import pandas as pd
 import config
 from modules import champion_store
 from modules.features import add_features
-from modules.genome import Genome, make_signal, mtf_side_allowed
+from modules.genome import Genome, diagnose_entry, make_signal, mtf_side_allowed
 from modules.quant_data import estimate_depth_fill
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ class PaperChampion:
         *,
         on_close: Callable[[dict], None] | None = None,
         on_open: Callable[[dict], None] | None = None,
+        on_tick: Callable[[dict], None] | None = None,
     ) -> None:
         champion_store.init_db()
         self.state = champion_store.get_paper_state()
@@ -45,7 +46,9 @@ class PaperChampion:
             champion_store.set_paper_state(self.state)
         self.on_close = on_close
         self.on_open = on_open
+        self.on_tick = on_tick
         self._closed_this_tick: list[dict] = []
+        self.last_tick_report: dict[str, Any] | None = None
 
     def save(self) -> None:
         champion_store.set_paper_state(self.state)
@@ -64,10 +67,7 @@ class PaperChampion:
     def process(self, df: pd.DataFrame) -> list[dict]:
         """Process one window ending at latest closed candle. Returns newly closed trades."""
         self._closed_this_tick = []
-        if not self.state.get("champion"):
-            logger.warning("No qualified Champion. Paper trader will not open positions.")
-            return []
-        g = Genome(**self.state["champion"])
+        self.last_tick_report = None
         x = add_features(df).reset_index(drop=True)
         if x.empty:
             return []
@@ -76,6 +76,29 @@ class PaperChampion:
         if self.state.get("last_candle") == candle_id:
             return []
 
+        if not self.state.get("champion"):
+            logger.warning("No qualified Champion. Paper trader will not open positions.")
+            report = {
+                "candle": candle_id,
+                "close": float(last.close),
+                "action": "SKIP",
+                "why": "chưa có Champion (đợi research qualify)",
+                "family": None,
+                "equity": float(self.state.get("equity") or config.INITIAL_CAPITAL),
+            }
+            self.last_tick_report = report
+            self.state["last_candle"] = candle_id
+            self.save()
+            if self.on_tick:
+                try:
+                    self.on_tick(report)
+                except Exception as exc:
+                    logger.warning("on_tick callback failed: %s", exc)
+            return []
+        g = Genome(**self.state["champion"])
+
+        opened_this = False
+        closed_reason: str | None = None
         pending = self.state.get("pending")
         if (
             pending
@@ -130,6 +153,7 @@ class PaperChampion:
             }
             self.state["position"] = position
             self.state["pending"] = None
+            opened_this = True
             logger.info(
                 "PAPER OPEN %s entry=%.2f lev=%sx margin=%.2f qty=%.6f SL=%.2f TP=%.2f",
                 "LONG" if pending["side"] == 1 else "SHORT",
@@ -203,6 +227,7 @@ class PaperChampion:
                 self.state["trade_count"] = int(self.state.get("trade_count") or 0) + 1
                 self.state["position"] = None
                 self._closed_this_tick.append(trade)
+                closed_reason = reason
                 logger.info(
                     "PAPER CLOSE %s pnl=%+.4f equity=%.2f",
                     reason,
@@ -215,24 +240,76 @@ class PaperChampion:
                     except Exception as exc:
                         logger.warning("on_close callback failed: %s", exc)
 
-        if (
-            self.state.get("position") is None
-            and self.state.get("pending") is None
-            and len(x) > 202
-        ):
-            side = make_signal(last, x.iloc[-2], g)
-            if mtf_side_allowed(last, side, g.mtf_filter):
-                self.state["pending"] = {
-                    "side": side,
-                    "signal_time": candle_id,
-                    "atr": float(last.atr),
-                    "genome_id": g.genome_id,
-                    "leverage": int(g.leverage),
-                    "atr_stop": g.atr_stop,
-                    "reward_r": g.reward_r,
-                }
+        decision = {"side": None, "action": "HOLD", "why": ""}
+        if self.state.get("position") is not None:
+            pos = self.state["position"]
+            side_txt = "LONG" if pos["side"] == 1 else "SHORT"
+            decision = {
+                "side": pos["side"],
+                "action": "HOLD",
+                "why": f"đang {side_txt} — chờ SL/TP (sl={float(pos['sl']):.0f} tp={float(pos['tp']):.0f})",
+            }
+        elif self.state.get("pending") is not None and not opened_this:
+            pend = self.state["pending"]
+            side_txt = "LONG" if pend["side"] == 1 else "SHORT"
+            decision = {
+                "side": pend["side"],
+                "action": "PENDING",
+                "why": f"đã có pending {side_txt} — chờ nến sau để fill",
+            }
+        elif len(x) <= 202:
+            decision = {
+                "side": None,
+                "action": "SKIP",
+                "why": f"chưa đủ bar warm-up ({len(x)}/203)",
+            }
+        else:
+            decision = diagnose_entry(last, x.iloc[-2], g)
+            if decision["action"] == "PENDING" and decision.get("side") is not None:
+                side = int(decision["side"])
+                if mtf_side_allowed(last, side, g.mtf_filter):
+                    self.state["pending"] = {
+                        "side": side,
+                        "signal_time": candle_id,
+                        "atr": float(last.atr),
+                        "genome_id": g.genome_id,
+                        "leverage": int(g.leverage),
+                        "atr_stop": g.atr_stop,
+                        "reward_r": g.reward_r,
+                    }
+
+        if opened_this:
+            pos = self.state.get("position") or {}
+            decision = {
+                "side": pos.get("side"),
+                "action": "OPEN",
+                "why": f"fill {'LONG' if pos.get('side') == 1 else 'SHORT'} @ {float(pos.get('entry') or 0):.2f}",
+            }
+        elif closed_reason:
+            decision = {
+                "side": None,
+                "action": f"CLOSE_{closed_reason}",
+                "why": f"đóng lệnh vì {closed_reason}",
+            }
+
+        report = {
+            "candle": candle_id,
+            "close": float(last.close),
+            "atr_pct": float(last.atr_pct) if pd.notna(last.atr_pct) else None,
+            "rsi": float(last.rsi) if pd.notna(last.rsi) else None,
+            "family": g.family,
+            "genome_id": g.genome_id,
+            "equity": float(self.state.get("equity") or 0),
+            **decision,
+        }
+        self.last_tick_report = report
         self.state["last_candle"] = candle_id
         self.save()
+        if self.on_tick:
+            try:
+                self.on_tick(report)
+            except Exception as exc:
+                logger.warning("on_tick callback failed: %s", exc)
         return list(self._closed_this_tick)
 
     def summary(self) -> dict[str, Any]:

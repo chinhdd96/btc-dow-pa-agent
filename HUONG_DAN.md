@@ -10,6 +10,8 @@ LLM đề xuất → Evolution + backtest + validation → Champion
 
 **Timeframe:** entry trên nến **15m** đã đóng (`TIMEFRAME_MAIN=15m`). Bias HTF: **1h / 4h / 1d**. Signal nến T → fill open nến T+1 (~15 phút sau); không trade nến đang forming.
 
+**Telegram mỗi nến 15m:** notify ngắn (close / ATR% / RSI / action / vì sao SKIP hoặc PENDING). OPEN/CLOSE vẫn có tin riêng.
+
 ---
 
 ## 1. Cài đặt
