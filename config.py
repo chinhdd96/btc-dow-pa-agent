@@ -126,13 +126,7 @@ HYPOTHESES_GITHUB_PATH = os.getenv(
     "HYPOTHESES_GITHUB_PATH", "generated/hypotheses.json"
 ).strip()
 
-# Historical replay: on start → 30d backtest then live (skip if done marker unless FORCE)
-REPLAY_ON_START = os.getenv("REPLAY_ON_START", "true").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+# Historical replay (legacy Dow/PA) — default OFF for Champion flow
 REPLAY_FORCE = os.getenv("REPLAY_FORCE", "false").strip().lower() in {
     "1",
     "true",
@@ -169,18 +163,60 @@ REPLAY_GITHUB_PATH = os.getenv(
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET", "")
 
-# Paper mode: full flow, public market data, NO real orders (Telegram signal only).
-# Auto-on when Binance keys missing, or set PAPER_MODE=true explicitly.
-_paper_env = os.getenv("PAPER_MODE", "").strip().lower()
-PAPER_MODE = (
-    _paper_env in {"1", "true", "yes", "on"}
-    or not (BINANCE_API_KEY and BINANCE_API_SECRET)
-)
+# Champion Research Agent: live Binance data + PAPER fills only (no live orders).
+# PAPER_MODE defaults TRUE for this paradigm; set PAPER_MODE=false only after
+# a future live-execution implementation is explicitly approved.
+_paper_env = os.getenv("PAPER_MODE", "true").strip().lower()
+PAPER_MODE = _paper_env not in {"0", "false", "no", "off"}
+# Force paper-only in this release — live bracket is hard-disabled.
+FORCE_PAPER_ONLY = True
 PAPER_BALANCE_USDT = float(os.getenv("PAPER_BALANCE_USDT", "1000"))
-# Margin USDT mỗi lệnh paper (notional = margin * LEVERAGE)
+# Margin USDT mỗi lệnh paper (legacy Dow/PA path; Champion uses MAX_MARGIN_FRACTION)
 PAPER_MARGIN_PER_TRADE = float(os.getenv("PAPER_MARGIN_PER_TRADE", "100"))
-# Paper manage mode: LLM re-evaluates open/pending each cycle
-PAPER_MANAGE_ENABLED = os.getenv("PAPER_MANAGE_ENABLED", "true").strip().lower() in {
+# Legacy LLM manage — disabled in Champion flow
+PAPER_MANAGE_ENABLED = os.getenv("PAPER_MANAGE_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+# --- Champion research / paper (v3-style) ---
+INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", str(PAPER_BALANCE_USDT)))
+MAX_MARGIN_FRACTION = float(os.getenv("MAX_MARGIN_FRACTION", "0.10"))
+FEE_RATE = float(os.getenv("FEE_RATE", "0.0005"))
+SLIPPAGE_RATE = float(os.getenv("SLIPPAGE_RATE", "0.0002"))
+MAINTENANCE_MARGIN_RATE = float(os.getenv("MAINTENANCE_MARGIN_RATE", "0.005"))
+HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "730"))
+POPULATION_SIZE = int(os.getenv("POPULATION_SIZE", "36"))
+GENERATIONS = int(os.getenv("GENERATIONS", "12"))
+ELITE_FRACTION = float(os.getenv("ELITE_FRACTION", "0.20"))
+MUTATION_RATE = float(os.getenv("MUTATION_RATE", "0.35"))
+TRAIN_FRACTION = float(os.getenv("TRAIN_FRACTION", "0.55"))
+VALIDATION_FRACTION = float(os.getenv("VALIDATION_FRACTION", "0.20"))
+MIN_VALIDATION_TRADES = int(os.getenv("MIN_VALIDATION_TRADES", "12"))
+MIN_TEST_TRADES = int(os.getenv("MIN_TEST_TRADES", "8"))
+PAPER_POLL_SECONDS = int(os.getenv("PAPER_POLL_SECONDS", "20"))
+RESEARCH_EVERY_HOURS = float(os.getenv("RESEARCH_EVERY_HOURS", "24"))
+RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))
+LLM_RESEARCH_ENABLED = os.getenv("LLM_RESEARCH_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# Safer default leverage set for paper learning (override via env)
+_lev_raw = os.getenv("LEVERAGE_CANDIDATES", "1,2,3,5,10").strip()
+LEVERAGE_CANDIDATES: tuple[int, ...] = tuple(
+    int(x.strip()) for x in _lev_raw.split(",") if x.strip()
+) or (1, 2, 3, 5, 10)
+DECAY_MIN_TRADES = int(os.getenv("DECAY_MIN_TRADES", "8"))
+DECAY_EXPECTANCY_RATIO = float(os.getenv("DECAY_EXPECTANCY_RATIO", "0.0"))
+ARCHIVE_LEARN_STATE_ON_START = os.getenv(
+    "ARCHIVE_LEARN_STATE_ON_START", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+# Disable legacy LLM hourly replay seed by default
+REPLAY_ON_START = os.getenv("REPLAY_ON_START", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -231,6 +267,15 @@ DEEPSEEK_MODEL = LLM_MODEL
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+RESEARCH_DIR = BASE_DIR / "generated" / "research"
+RESEARCH_DB_PATH = os.getenv(
+    "RESEARCH_DB_PATH", str(RESEARCH_DIR / "btc_agent.sqlite3")
+)
+RESEARCH_REPORT_PATH = os.getenv(
+    "RESEARCH_REPORT_PATH", str(RESEARCH_DIR / "last_report.json")
+)
+ARCHIVE_DIR = BASE_DIR / "generated" / "archive"
+
 PATHS = {
     "CORE_PLAYBOOK": str(BASE_DIR / "generated" / "core_playbook.md"),
     "DAILY_PLAYBOOK": str(BASE_DIR / "generated" / "daily_playbook.md"),
@@ -244,4 +289,6 @@ PATHS = {
     "HYPOTHESES": str(BASE_DIR / "generated" / "hypotheses.json"),
     "REPLAY_SUMMARY": str(BASE_DIR / "generated" / "replay" / "summary.json"),
     "REPLAY_DONE": str(BASE_DIR / "generated" / "replay" / "done.json"),
+    "RESEARCH_DB": RESEARCH_DB_PATH,
+    "RESEARCH_REPORT": RESEARCH_REPORT_PATH,
 }

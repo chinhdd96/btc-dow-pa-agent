@@ -1,15 +1,13 @@
 """
-Mono-Agent BTC Dow & PA Trader — main orchestrator.
+Champion Research Agent — live Binance data, PAPER fills only.
 
-Runs 24/7 locally:
-- Trade decision every TIMEFRAME_MAIN (1h)
-- Learner + news crawlers every 24h
-- Memory compaction Sundays 00:00 UTC
+Flow:
+  LLM propose → evolution/backtest/validation → Champion promote
+  → paper on closed live candles → post-mortem / decay → re-research
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import traceback
@@ -20,20 +18,21 @@ from typing import Any
 import schedule
 
 import config
-from modules.binance_client import BinanceClient, BinanceClientError
-from modules import adaptive_rules
-from modules import candle_store
-from modules import decision_history
-from modules import hypothesis_store
+from modules import champion_store
+from modules import strategy_decay
+from modules.archive_state import archive_learn_state
 from modules.learner_crawler import run_learner_crawler
-from modules.llm_agent import LLMAgent
-from modules import memory_manager as memory_manager_mod
+from modules.llm_researcher import post_mortem_paper_trade
 from modules.memory_manager import MemoryManager
 from modules.news_crawler import run_news_crawler
 from modules.notifier import Notifier
-from modules import paper_portfolio as paper_portfolio_mod
-from modules.paper_portfolio import PaperPortfolio
-from modules import trade_analytics
+from modules.paper_champion import PaperChampion
+from modules.quant_data import (
+    enrich_derivatives_data,
+    enrich_multi_timeframe,
+    fetch_klines,
+)
+from modules.research_pipeline import run_research
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,1196 +41,158 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def _load_state() -> dict[str, Any]:
+def _load_runtime() -> dict[str, Any]:
     path = Path(config.PATHS["STATE"])
     if not path.exists():
-        return {
-            "had_position": False,
-            "last_decision": None,
-            "position_snapshot": None,
-        }
+        return {"last_research_ts": 0.0, "last_compact_week": None}
     try:
+        import json
+
         return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {
-            "had_position": False,
-            "last_decision": None,
-            "position_snapshot": None,
-        }
+    except Exception:
+        return {"last_research_ts": 0.0, "last_compact_week": None}
 
 
-def _save_state(state: dict[str, Any]) -> None:
+def _save_runtime(state: dict[str, Any]) -> None:
+    import json
+
     path = Path(config.PATHS["STATE"])
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _load_news_context() -> dict[str, Any]:
-    path = Path(config.PATHS["CONTEXT_NEWS"])
-    if not path.exists():
-        return {}
+def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def _parse_iso_ms(value: Any) -> int | None:
-    if value is None:
+        logger.info("=== Research job start ===")
+        report = run_research(use_llm=config.LLM_RESEARCH_ENABLED)
+        champ = report.get("champion") or {}
+        review = report.get("ai_review") or {}
+        msg = (
+            "RESEARCH xong (PAPER only)\n"
+            f"Champion={champ.get('family') or 'NONE'} "
+            f"id={(report.get('champion_evaluation') or {}).get('genome_id') or '—'}\n"
+            f"Qualified top={sum(1 for c in report.get('top_candidates') or [] if c.get('qualified'))}\n"
+            f"AI review: {(review.get('summary') or '')[:400]}"
+        )
+        notifier.send(msg)
+        rt = _load_runtime()
+        rt["last_research_ts"] = time.time()
+        _save_runtime(rt)
+        # Clear decay flag after research
+        st = champion_store.get_paper_state()
+        st["research_due"] = False
+        champion_store.set_paper_state(st)
+        logger.info("=== Research job done ===")
+        return report
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("research job failed")
+        notifier.notify_error("job_research", str(exc))
         return None
-    try:
-        if isinstance(value, (int, float)):
-            v = int(value)
-            return v if v > 10_000_000_000 else v * 1000
-        s = str(value).strip().replace("Z", "+00:00")
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return int(dt.timestamp() * 1000)
-    except (TypeError, ValueError, OSError):
-        return None
 
 
-def _candles_since_fill(
-    binance: BinanceClient,
-    filled_at: Any,
-    interval: str = "1m",
-    *,
-    max_bars: int = 1500,
-) -> list[dict[str, Any]]:
-    """Nến từ lúc khớp entry → hiện tại (path giá để quét SL/TP / post-mortem)."""
-    start_ms = _parse_iso_ms(filled_at)
-    if not start_ms:
-        return []
-    # Lùi 1 bar để bao nến chứa thời điểm fill
-    interval_ms = {
-        "1m": 60_000,
-        "5m": 300_000,
-        "15m": 900_000,
-        "1h": 3_600_000,
-        "4h": 14_400_000,
-        "1d": 86_400_000,
-    }.get(interval, 60_000)
-    start_ms = max(0, start_ms - interval_ms)
-    end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    return binance.get_klines_range(
-        interval,
-        start_time=start_ms,
-        end_time=end_ms,
-        max_bars=max_bars,
-        max_pages=3 if interval == "1m" else 2,
-    )
-
-
-def _post_mortem_candles(
-    binance: BinanceClient,
-    filled_at: Any,
-) -> list[dict[str, Any]]:
-    """1H từ lúc khớp entry (fallback 20 nến gần nhất nếu thiếu filled_at)."""
-    if filled_at:
+def _handle_closed_trade(
+    trade: dict,
+    notifier: Notifier,
+    memory: MemoryManager,
+) -> None:
+    st = champion_store.get_paper_state()
+    genome = st.get("champion")
+    pm = post_mortem_paper_trade(trade, genome=genome)
+    lesson = pm.get("lesson") or ""
+    if lesson:
         try:
-            bars = _candles_since_fill(
-                binance, filled_at, config.TIMEFRAME_MAIN, max_bars=48
+            memory.add_lesson(
+                regime="CHAMPION_PAPER",
+                mistake_or_insight=lesson,
+                actionable_rule=f"genome={trade.get('genome_id')} {pm.get('classification')}",
+                classification=str(pm.get("classification") or ""),
+                setup_tag=str(trade.get("family") or ""),
+                close_reason=str(trade.get("exit_reason") or ""),
+                pnl=float(trade.get("pnl") or 0),
             )
-            if bars:
-                return bars
-        except BinanceClientError as exc:
-            logger.warning("post-mortem candles since fill failed: %s", exc)
-    try:
-        return binance.get_klines(config.TIMEFRAME_MAIN, limit=20)
-    except BinanceClientError:
-        return []
+        except Exception as exc:
+            logger.warning("add_lesson failed: %s", exc)
 
+    hints = pm.get("challenger_hints") or []
+    if hints:
+        existing = list(st.get("challenger_hints") or [])
+        existing.extend(hints)
+        st["challenger_hints"] = existing[-16:]
+        champion_store.set_paper_state(st)
 
-def effective_min_score(memory: MemoryManager) -> float:
-    base = memory.get_min_score()
-    news = _load_news_context()
-    if str(news.get("news_risk_level", "")).upper() == "HIGH":
-        return max(base, config.PENALTY_MIN_SCORE)
-    return base
+    if pm.get("decay_signal"):
+        st = champion_store.get_paper_state()
+        st["research_due"] = True
+        champion_store.set_paper_state(st)
 
-
-def validate_decision_hard(
-    decision: dict[str, Any],
-    min_score: float,
-    binance: BinanceClient,
-    primary_bias: str | None = None,
-    *,
-    closed_trades: list[dict[str, Any]] | None = None,
-    allow_l2_relief: bool = False,
-) -> tuple[dict[str, Any], str | None]:
-    """Apply Python hard guards (incl. Dow primary bias + profit-first setup gates)."""
-    action = str(decision.get("action", "HOLD")).upper()
-    if action == "HOLD":
-        return decision, None
-
-    if config.DOW_DIRECTION_GATE:
-        bias = str(
-            primary_bias or decision.get("primary_bias") or ""
-        ).upper()
-        if "SIDEWAY" in bias:
-            decision = dict(decision)
-            decision["action"] = "HOLD"
-            reason = "Chặn Dow: primary SIDEWAY → HOLD"
-            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-            return decision, reason
-        if bias == "UPTREND" and action == "SELL":
-            decision = dict(decision)
-            decision["action"] = "HOLD"
-            reason = "Chặn Dow: primary UPTREND — không SELL"
-            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-            return decision, reason
-        if bias == "DOWNTREND" and action == "BUY":
-            decision = dict(decision)
-            decision["action"] = "HOLD"
-            reason = "Chặn Dow: primary DOWNTREND — không BUY"
-            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-            return decision, reason
-
-    score = float(decision.get("setup_score") or 0)
-    try:
-        signal_level = int(decision.get("signal_level") or 1)
-    except (TypeError, ValueError):
-        signal_level = 1
-    bias = str(primary_bias or decision.get("primary_bias") or "")
-    setup_tag = trade_analytics.setup_tag_from_decision(decision)
-    trades = list(closed_trades or [])
-
-    # Opportunity-first: hard-block chỉ khi SETUP_BLOCK_HARD=true
-    blocked, block_reason = trade_analytics.should_block_setup(trades, setup_tag)
-    if blocked:
-        decision = dict(decision)
-        decision["action"] = "HOLD"
-        decision["reasoning"] = f"{block_reason}. {decision.get('reasoning', '')}"
-        return decision, block_reason
-
-    # L1 = quan sát; BUY/SELL tối thiểu L2 (trừ zero-trade relief)
-    min_lvl = int(getattr(config, "ENTRY_MIN_SIGNAL_LEVEL", 2) or 2)
-    if signal_level < min_lvl and not allow_l2_relief:
-        decision = dict(decision)
-        decision["action"] = "HOLD"
-        reason = f"Chặn: signal_level {signal_level} < {min_lvl} (L1 chỉ quan sát)"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    req_score = float(min_score)
-    soft_pen, soft_note = trade_analytics.setup_score_penalty(trades, setup_tag)
-    if soft_pen > 0:
-        req_score += soft_pen
-
-    div_pen, div_note = trade_analytics.diversity_score_penalty(trades, setup_tag)
-    if div_pen > 0:
-        req_score += div_pen
-
-    # Provisional R:R for hypothesis override (L3 + RR)
-    entry = decision.get("entry_price")
-    sl = decision.get("stop_loss_price")
-    tp = decision.get("take_profit_price")
-    try:
-        mark = binance.get_mark_price()
-    except BinanceClientError:
-        mark = float(entry or 0)
-    use_entry = float(entry) if entry else mark
-    provisional_rr = None
-    try:
-        if sl is not None and tp is not None:
-            risk = abs(use_entry - float(sl))
-            reward = abs(float(tp) - use_entry)
-            if risk > 0:
-                provisional_rr = reward / risk
-    except (TypeError, ValueError):
-        provisional_rr = None
-
-    # Pole-3: APPLY AI hypotheses (single behavior source)
-    hyp_res = hypothesis_store.apply_to_decision(
-        setup_tag,
-        signal_level=signal_level,
-        risk_reward=provisional_rr,
-        allow_l2_relief=allow_l2_relief,
+    decay = strategy_decay.check_decay()
+    side = "LONG" if trade.get("side") == 1 else "SHORT"
+    notifier.send(
+        f"PAPER CLOSE {side} {trade.get('exit_reason')}\n"
+        f"PnL={float(trade.get('pnl') or 0):+.4f}u | "
+        f"Equity={float(trade.get('equity_after') or st.get('equity') or 0):.2f}u\n"
+        f"Genome={trade.get('genome_id')} | {pm.get('classification')}\n"
+        f"{(lesson or '')[:300]}\n"
+        f"Decay={decay.get('decay')} {decay.get('reason') or ''}"
     )
-    req_score += float(hyp_res.get("extra_score") or 0)
-    prefer_tags = list(hyp_res.get("prefer_tags") or [])
-    hyp_notes = list(hyp_res.get("notes") or [])
-    decision = dict(decision)
-    decision["hyp_ids_applied"] = list(hyp_res.get("hyp_ids_applied") or [])
-    decision["blocked_by_hyp"] = hyp_res.get("blocked_by_hyp")
-
-    if hyp_res.get("blocked_by_hyp") and hyp_res.get("hold_reason"):
-        hypothesis_store.record_block(str(hyp_res["blocked_by_hyp"]))
-        decision["action"] = "HOLD"
-        reason = str(hyp_res["hold_reason"])
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    chop_fb = trade_analytics.is_chop_failed_breakout(decision, bias)
-    if chop_fb:
-        req_score = max(req_score, config.BASE_MIN_SCORE + config.ADAPTIVE_CHOP_BONUS)
-        if (
-            getattr(config, "CHOP_REQUIRE_L3", False)
-            and signal_level < 3
-            and not allow_l2_relief
-        ):
-            decision["action"] = "HOLD"
-            reason = (
-                f"Chặn chop/FB: cần signal_level≥3 (got {signal_level}) "
-                f"tag={setup_tag}"
-            )
-            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-            return decision, reason
-    if allow_l2_relief:
-        # Idle: nới điểm BASE — không xóa / bỏ qua AVOID hyp (đã xử lý ở trên)
-        req_score = min(req_score, config.BASE_MIN_SCORE)
-
-    notes = [n for n in (soft_note, div_note, *hyp_notes) if n]
-    if prefer_tags:
-        notes.append(f"PREFER_ALT tags={prefer_tags}")
-    if notes:
-        decision["reasoning"] = f"{'; '.join(notes)}. {decision.get('reasoning', '')}"
-
-    if score < req_score:
-        decision["action"] = "HOLD"
-        reason = f"Chặn cứng: điểm {score} < ngưỡng {req_score}"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    decision["entry_price"] = use_entry
-
-    ok, reason = binance.validate_stop_loss(action, use_entry, sl)
-    if not ok:
-        decision["action"] = "HOLD"
-        decision["reasoning"] = f"Chặn SL: {reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    if tp is None or float(tp) <= 0:
-        decision["action"] = "HOLD"
-        reason = "Chặn cứng: thiếu giá chốt lời (TP)"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    if action == "BUY" and float(tp) <= use_entry:
-        decision["action"] = "HOLD"
-        reason = "Chặn cứng: BUY thì TP phải > giá vào"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if action == "SELL" and float(tp) >= use_entry:
-        decision["action"] = "HOLD"
-        reason = "Chặn cứng: SELL thì TP phải < giá vào"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    min_rr = trade_analytics.effective_min_rr(decision, bias)
-    risk = abs(use_entry - float(sl))
-    reward = abs(float(tp) - use_entry)
-    if risk <= 0 or reward / risk < min_rr:
-        decision["action"] = "HOLD"
-        reason = f"Chặn cứng: R:R {reward / risk if risk else 0:.2f} < {min_rr}"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    decision["risk_reward_ratio"] = round(reward / risk, 2)
-    decision["setup_tag"] = setup_tag
-    return decision, None
 
 
-def validate_manage_hard(
-    decision: dict[str, Any],
-    *,
-    position: dict[str, Any] | None,
-    pending: dict[str, Any] | None,
-    mark: float,
-) -> tuple[dict[str, Any], str | None]:
-    """Python hard gates for paper manage mode."""
-    decision = dict(decision)
-    action = str(decision.get("manage_action") or "HOLD").upper()
-    thesis = str(decision.get("thesis_status") or "INTACT").upper()
+def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
+    """One paper tick on live closed candles (idempotent by last_candle)."""
     try:
-        score = float(decision.get("manage_score") or 0)
-    except (TypeError, ValueError):
-        score = 0.0
+        rt = _load_runtime()
+        st = champion_store.get_paper_state()
+        due = bool(st.get("research_due"))
+        last_ts = float(rt.get("last_research_ts") or 0)
+        if due or (time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600):
+            job_research(notifier, memory)
 
-    if position:
-        allowed = {"HOLD", "CLOSE", "TRAIL"}
-    elif pending:
-        allowed = {"HOLD", "CANCEL_PENDING"}
-    else:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        return decision, "Không có exposure"
+        days = max(30, min(config.HISTORY_DAYS, 90))
+        bars = fetch_klines(config.TIMEFRAME_MAIN, days, config.SYMBOL)
+        bars = enrich_derivatives_data(bars, config.SYMBOL, days)
+        bars = enrich_multi_timeframe(bars, config.SYMBOL, days)
 
-    if action not in allowed:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn manage: {action} không hợp lệ khi {'position' if position else 'pending'}"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
+        def on_open(pos: dict) -> None:
+            side = "LONG" if pos.get("side") == 1 else "SHORT"
+            notifier.send(
+                f"PAPER OPEN {side}\n"
+                f"entry={float(pos['entry']):.2f} lev={pos.get('leverage')}x "
+                f"margin={float(pos.get('margin') or 0):.2f}\n"
+                f"SL={float(pos['sl']):.2f} TP={float(pos['tp']):.2f}\n"
+                f"genome={pos.get('genome_id')} family={pos.get('family')}"
+            )
 
-    if action == "HOLD":
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        return decision, None
-
-    # CLOSE: allow lower score when underwater near SL / stale / deep loss
-    close_relief = False
-    if action == "CLOSE" and position:
-        side = str(position.get("action") or "").upper()
-        entry = float(position.get("fill_price") or position.get("entry") or 0)
-        sl = float(position.get("stop_loss") or 0)
-        qty = float(position.get("quantity") or 0)
-        initial_sl = float(position.get("initial_stop_loss") or sl)
-        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
-        if side == "BUY":
-            upnl = qty * (mark - entry)
-            risk_left = (mark - sl) if sl else 0.0
-            total_risk = (entry - sl) if entry and sl else 0.0
+        trader = PaperChampion(
+            on_close=lambda t: _handle_closed_trade(t, notifier, memory),
+            on_open=on_open,
+        )
+        last_seen = trader.state.get("last_candle")
+        closed_all: list[dict] = []
+        if last_seen:
+            unseen_idx = [
+                i
+                for i, ts in enumerate(bars.open_time.astype(str).tolist())
+                if ts > str(last_seen)
+            ]
+            for idx in unseen_idx:
+                closed_all.extend(
+                    trader.process(bars.iloc[max(0, idx - 205) : idx + 1])
+                )
         else:
-            upnl = qty * (entry - mark)
-            risk_left = (sl - mark) if sl else 0.0
-            total_risk = (sl - entry) if entry and sl else 0.0
-        near_sl = (
-            total_risk > 0
-            and risk_left >= 0
-            and risk_left <= total_risk * config.MANAGE_NEAR_SL_PCT
-        )
-        hours = trade_analytics.hours_since_iso(position.get("filled_at"))
-        stale = hours is not None and hours >= config.MANAGE_MAX_HOURS
-        deep = False
-        if r_dist > 0 and qty > 0:
-            deep = (upnl / (qty * r_dist)) <= -config.MANAGE_DEEP_LOSS_R
-        if upnl < 0 and (near_sl or stale or deep):
-            # Don't cut healthy pullback: INTACT + not near SL + not deep
-            if thesis == "INTACT" and not deep and not near_sl and not stale:
-                close_relief = False
-            else:
-                close_relief = True
+            closed_all.extend(trader.process(bars))
 
-    min_score_needed = config.MANAGE_MIN_SCORE
-    if action == "CLOSE" and close_relief:
-        min_score_needed = config.MANAGE_CLOSE_MIN_SCORE
-
-    if score < min_score_needed:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn manage: điểm {score} < {min_score_needed}"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    if action == "CLOSE":
-        if thesis not in {"INVALIDATED", "WEAKENING"} and not close_relief:
-            decision["manage_action"] = "HOLD"
-            decision["action"] = "MANAGE_HOLD"
-            reason = f"Chặn CLOSE: thesis_status={thesis} (cần WEAKENING/INVALIDATED)"
-            decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-            return decision, reason
-        decision["manage_action"] = "CLOSE"
-        decision["action"] = "MANAGE_CLOSE"
-        return decision, None
-
-    if action == "CANCEL_PENDING":
-        decision["manage_action"] = "CANCEL_PENDING"
-        decision["action"] = "MANAGE_CANCEL_PENDING"
-        return decision, None
-
-    # TRAIL
-    new_sl = decision.get("new_stop_loss")
-    if new_sl is None:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = "Chặn TRAIL: thiếu new_stop_loss"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    pos = position or {}
-    side = str(pos.get("action") or "").upper()
-    entry = float(pos.get("fill_price") or pos.get("entry") or 0)
-    old_sl = float(pos.get("stop_loss") or 0)
-    initial_sl = float(pos.get("initial_stop_loss") or old_sl)
-    qty = float(pos.get("quantity") or 0)
-    new_sl_f = float(new_sl)
-
-    if side == "BUY":
-        upnl = qty * (mark - entry)
-        tighter = new_sl_f > old_sl
-        at_or_beyond_be = new_sl_f >= entry
-        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
-        locked_r = ((new_sl_f - entry) / r_dist) if r_dist > 0 else 0.0
-    elif side == "SELL":
-        upnl = qty * (entry - mark)
-        tighter = new_sl_f < old_sl
-        at_or_beyond_be = new_sl_f <= entry
-        r_dist = abs(entry - initial_sl) if initial_sl else 0.0
-        locked_r = ((entry - new_sl_f) / r_dist) if r_dist > 0 else 0.0
-    else:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = "Chặn TRAIL: side không hợp lệ"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    if upnl <= 0:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn TRAIL: chưa lãi (uPnL={upnl:+.4f})"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if not tighter:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn TRAIL: SL mới không chặt hơn (old={old_sl} new={new_sl_f})"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if not at_or_beyond_be:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn TRAIL: SL mới chưa về/khóa BE (entry={entry} new={new_sl_f})"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    # Prefer lock ≥ TRAIL_MIN_LOCK_R; still allow pure breakeven (locked_r >= 0)
-    if locked_r < 0:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = f"Chặn TRAIL: locked_r={locked_r:.2f} < 0"
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    # Critical: SL must still be a real stop vs mark — otherwise on_price
-    # instantly "hits" it (e.g. SELL trail to 81900 while mark=82100).
-    if side == "BUY" and new_sl_f >= mark:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = (
-            f"Chặn TRAIL: BUY SL mới {new_sl_f} >= mark {mark:.2f} "
-            "(đã bị giá vượt — đóng ảo)"
-        )
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-    if side == "SELL" and new_sl_f <= mark:
-        decision["manage_action"] = "HOLD"
-        decision["action"] = "MANAGE_HOLD"
-        reason = (
-            f"Chặn TRAIL: SELL SL mới {new_sl_f} <= mark {mark:.2f} "
-            "(đã bị giá vượt — đóng ảo)"
-        )
-        decision["reasoning"] = f"{reason}. {decision.get('reasoning', '')}"
-        return decision, reason
-
-    decision["manage_action"] = "TRAIL"
-    decision["action"] = "MANAGE_TRAIL"
-    decision["new_stop_loss"] = new_sl_f
-    decision["locked_r"] = round(locked_r, 3)
-    return decision, None
-
-
-def handle_closed_position(
-    binance: BinanceClient,
-    memory: MemoryManager,
-    llm: LLMAgent,
-    notifier: Notifier,
-    state: dict[str, Any],
-) -> None:
-    snap = state.get("position_snapshot") or {}
-    last = state.get("last_decision") or {}
-    action = snap.get("side") or last.get("action") or "BUY"
-    entry = float(snap.get("entry_price") or last.get("entry_price") or 0)
-    sl = last.get("stop_loss_price")
-    tp = last.get("take_profit_price")
-    regime = last.get("market_regime", "REGIME_SIDEWAY_CHOP")
-    reasoning = last.get("reasoning", "")
-
-    # Approximate PnL from last unrealized if available; else 0
-    pnl = float(snap.get("unrealized_pnl") or 0)
-    # Prefer mark vs entry for sign if pnl missing
-    try:
-        mark = binance.get_mark_price()
-        if entry > 0 and pnl == 0:
-            amt = float(snap.get("amount") or 0)
-            if action == "BUY":
-                pnl = (mark - entry) * amt
-            else:
-                pnl = (entry - mark) * amt
-    except BinanceClientError:
-        pass
-
-    result = "WIN" if pnl >= 0 else "LOSS"
-    filled_at = (
-        snap.get("filled_at")
-        or snap.get("opened_at")
-        or last.get("filled_at")
-        or last.get("opened_at")
-        or ""
-    )
-    candles = _post_mortem_candles(binance, filled_at)
-
-    lesson = llm.run_post_mortem(
-        action=action,
-        entry=entry,
-        sl=sl,
-        tp=tp,
-        result=result,
-        pnl=pnl,
-        regime=regime,
-        entry_reasoning=reasoning,
-        post_trade_candles=candles,
-        filled_at=str(filled_at or ""),
-    )
-    memory.add_lesson(
-        regime=lesson.get("regime", regime),
-        mistake_or_insight=lesson.get("mistake_or_insight", ""),
-        actionable_rule=lesson.get("actionable_rule", ""),
-        weight=int(lesson.get("weight", 1) or 1),
-        classification=str(lesson.get("classification") or ""),
-    )
-    stats = memory.record_closed_trade(result)
-    notifier.notify_post_mortem(lesson, result, pnl)
-    notifier.send(
-        f"Cập nhật thống kê: thua liên tiếp={stats.get('consecutive_losses')} | "
-        f"điểm tối thiểu={stats.get('current_min_score')} | "
-        f"tỷ lệ thắng={stats.get('win_rate')}"
-    )
-
-
-def maybe_run_meta_review(
-    memory: MemoryManager,
-    llm: LLMAgent,
-    notifier: Notifier,
-    paper: PaperPortfolio,
-) -> None:
-    """Pole-3 meta: AI keep/kill/revise/revoke hypotheses every HYP_META_EVERY_N closes."""
-    trades = paper.closed_trades()
-    n = len(trades)
-    every = int(getattr(config, "HYP_META_EVERY_N", 10) or 10)
-    if n < every:
-        return
-    state = _load_state()
-    last_n = int(state.get("meta_review_at_closes") or 0)
-    if n - last_n < every:
-        last_ts = state.get("meta_review_at")
-        hours = trade_analytics.hours_since_iso(last_ts) if last_ts else None
-        if hours is None or hours < 24:
-            return
-    stats = trade_analytics.summarize_trades(trades)
-    hyps = hypothesis_store.active_hypotheses()
-    if not hyps and stats.get("stable"):
-        state["meta_review_at_closes"] = n
-        state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
-        _save_state(state)
-        return
-    need = (
-        stats.get("expectancy", 0) < 0
-        or stats.get("pnl", 0) < 0
-        or stats.get("quality_wr", 0) < config.META_REVIEW_TARGET_QUALITY_WR
-        or bool(hyps)
-    )
-    if not need:
-        return
-
-    stats_txt = trade_analytics.format_stats_for_prompt(trades)
-    lose_tags = adaptive_rules.losing_setup_tags(trades)
-    hyp_txt = hypothesis_store.format_for_prompt(max_chars=1200)
-    proposed = llm.run_meta_review(
-        trades=trades,
-        lessons_summary=memory.get_all_lessons_summary(),
-        current_rules=hyps,
-        stats_text=stats_txt,
-        losing_tags=sorted(lose_tags),
-        hypotheses=hyps,
-        hyp_meta_text=hyp_txt,
-    )
-    actions = list(proposed.get("actions") or [])
-    # Soft pressure: if bleeding tag and no AVOID/PREFER active, seed one PREFER_ALT
-    has_pressure = any(
-        str(h.get("effect") or "") in {"PREFER_ALT", "AVOID_SOFT"}
-        and str(h.get("status")) == "active"
-        for h in hyps
-    )
-    if lose_tags and not has_pressure:
-        top = sorted(
-            lose_tags,
-            key=lambda t: trade_analytics.setup_expectancy(trades, t).get("pnl", 0),
-        )[0]
-        seeded = hypothesis_store.upsert_hypothesis(
-            {
-                "id": f"h_prefer_alt_{top[:12].lower()}",
-                "when_setup": top,
-                "effect": "PREFER_ALT",
-                "magnitude": 1.0,
-                "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP", "BREAKDOWN"],
-                "reason": f"Meta seed: {top} expectancy âm — ép đa dạng setup",
-            },
-            classification="BAD_SETUP",
-            closes_now=n,
-            origin="meta",
-        )
-        if seeded:
-            actions.append(
-                {
-                    "id": seeded.get("id"),
-                    "verdict": "keep",
-                    "reason": "auto seed PREFER_ALT",
-                }
-            )
-
-    applied = hypothesis_store.apply_meta_actions(actions, closes_now=n)
-    state["meta_review_at_closes"] = n
-    state["meta_review_at"] = datetime.now(timezone.utc).isoformat()
-    _save_state(state)
-    notifier.send(
-        "Meta-review hypotheses\n"
-        f"n={n} exp={stats['expectancy']:+.3f} pnl={stats['pnl']:+.2f} "
-        f"qWR={stats['quality_wr']*100:.0f}% active={len(hypothesis_store.active_hypotheses())}\n"
-        f"actions={applied or '(none)'}\n"
-        f"losing_tags={sorted(lose_tags)}\n"
-        f"{(proposed.get('summary') or '')[:300]}"
-    )
-
-
-def _paper_status_text(paper: PaperPortfolio) -> str:
-    s = paper.summary()
-    return (
-        f"Paper: số dư={s['balance']:.2f}u (đầu {s['initial_balance']:.0f}u) "
-        f"PnL={s['pnl_total']:+.2f}u | ngày={s['days_elapsed']:.1f}/30 "
-        f"lệnh={s['total_trades']} Thắng{s['wins']}/Thua{s['losses']}"
-    )
-
-
-def handle_paper_closed(
-    memory: MemoryManager,
-    llm: LLMAgent,
-    notifier: Notifier,
-    closed_event: dict[str, Any],
-    binance: BinanceClient,
-    *,
-    paper: PaperPortfolio | None = None,
-    post_trade_candles: list[dict[str, Any]] | str | None = None,
-) -> None:
-    trade = closed_event.get("trade") or {}
-    result = closed_event.get("result", "LOSS")
-    pnl = float(closed_event.get("pnl", 0))
-    filled_at = trade.get("opened_at") or trade.get("filled_at") or ""
-    if post_trade_candles is not None:
-        candles: list[dict[str, Any]] | str = post_trade_candles
-    else:
-        try:
-            candles = _post_mortem_candles(binance, filled_at)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("post_mortem candles skipped: %s", exc)
-            candles = []
-    close_reason = str(closed_event.get("reason") or trade.get("reason") or "")
-    lesson = llm.run_post_mortem(
-        action=trade.get("action", ""),
-        entry=float(trade.get("entry") or 0),
-        sl=trade.get("sl"),
-        tp=trade.get("tp"),
-        result=result,
-        pnl=pnl,
-        regime=trade.get("regime", "REGIME_SIDEWAY_CHOP"),
-        entry_reasoning=trade.get("reasoning", ""),
-        post_trade_candles=candles,
-        exit_price=(
-            float(trade["exit"])
-            if trade.get("exit") is not None
-            else None
-        ),
-        close_reason=close_reason,
-        filled_at=str(filled_at or ""),
-        is_quality_win=trade_analytics.is_quality_win(trade),
-    )
-    paper = paper or PaperPortfolio()
-    # Ensure closed trade has normalized setup_tag in ledger
-    setup_tag = trade_analytics.ensure_trade_setup_tag(trade)
-    try:
-        paper.normalize_last_closed_setup_tag(setup_tag)
-    except Exception:  # noqa: BLE001
-        pass
-    closed_all = paper.closed_trades()
-    # Prefer full list with this trade's tag fixed
-    if closed_all:
-        trade_analytics.ensure_trade_setup_tag(closed_all[-1])
-
-    classification = str(lesson.get("classification") or "")
-    # Micro side-effects: PROCESS_ERROR → heavier lesson weight
-    weight = int(lesson.get("weight", 1) or 1)
-    if classification == "PROCESS_ERROR":
-        weight = max(weight, 3)
-    elif classification == "BAD_SETUP":
-        weight = max(weight, 2)
-    elif classification == "GOOD_EDGE":
-        weight = max(weight, 2)
-
-    r_mult = trade_analytics.r_multiple_of_trade(trade)
-    memory.add_lesson(
-        regime=lesson.get("regime", trade.get("regime", "REGIME_SIDEWAY_CHOP")),
-        mistake_or_insight=lesson.get("mistake_or_insight", ""),
-        actionable_rule=lesson.get("actionable_rule", ""),
-        weight=weight,
-        classification=classification,
-        setup_tag=setup_tag,
-        close_reason=close_reason,
-        pnl=pnl,
-        r_multiple=r_mult,
-    )
-
-    # Pole-3: upsert hypothesis + credit eval on related hyps
-    n_closes = len(closed_all)
-    hyp_raw = lesson.get("hypothesis")
-    if hyp_raw is None and hypothesis_store.hypothesis_required(classification):
-        # Mandatory fallback from actionable_rule / setup
-        effect = "CHECKLIST" if classification == "PROCESS_ERROR" else "AVOID_SOFT"
-        if classification == "VALID_LOSS":
-            effect = "RAISE_SCORE"
-        hyp_raw = {
-            "when_setup": setup_tag or "UNKNOWN",
-            "effect": effect,
-            "magnitude": 1.0,
-            "prefer_tags": ["PULLBACK", "RETEST", "BREAKOUT", "SWEEP", "BREAKDOWN"],
-            "reason": str(lesson.get("actionable_rule") or lesson.get("mistake_or_insight") or "")[
-                :240
-            ],
-        }
-    upserted = None
-    try:
-        if hyp_raw is not None:
-            upserted = hypothesis_store.upsert_hypothesis(
-                hyp_raw,
-                classification=classification,
-                closes_now=n_closes,
-                origin="post_mortem",
-            )
+        if not trader.state.get("champion"):
+            logger.info("Flat: no Champion qualified yet")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("hypothesis upsert failed: %s", exc)
-    try:
-        credit = hypothesis_store.credit_close(
-            setup_tag,
-            pnl,
-            hyp_ids_at_entry=list(trade.get("hyp_ids_at_entry") or []),
-            closes_now=n_closes,
-        )
-        if credit:
-            logger.info("hypothesis credit: %s", credit)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("hypothesis credit failed: %s", exc)
-
-    stats = memory.resync_stats_from_trades(closed_all)
-    notifier.notify_post_mortem(lesson, result, pnl)
-    result_vi = "THẮNG" if str(result).upper() == "WIN" else "THUA"
-    line = trade_analytics.close_line_for_telegram(
-        trade, classification, trades=closed_all
-    )
-    notifier.send(
-        f"PAPER ĐÓNG LỆNH [{closed_event.get('reason')}] {result_vi} "
-        f"PnL={pnl:+.4f}u\n"
-        f"{line}\n"
-        f"{hypothesis_store.telegram_line(upserted)}\n"
-        f"{_paper_status_text(paper)}\n"
-        f"điểm tối thiểu (memory)={stats.get('current_min_score')}"
-    )
-    try:
-        maybe_run_meta_review(memory, llm, notifier, paper)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("meta_review after close skipped: %s", exc)
-
-
-def job_trade(
-    binance: BinanceClient,
-    memory: MemoryManager,
-    llm: LLMAgent,
-    notifier: Notifier,
-    paper: PaperPortfolio | None = None,
-) -> None:
-    logger.info("=== Trade job start ===")
-    state = _load_state()
-
-    # --- PAPER MODE: giả lập khớp entry / SL / TP theo giá live ---
-    if binance.paper_mode:
-        paper = paper or PaperPortfolio()
-        try:
-            price = binance.get_mark_price()
-            hist = candle_store.sync_all(binance)
-            candles_1d = hist["1d"]
-            candles_4h = hist["4h"]
-            candles_1h = hist["1h"]
-        except BinanceClientError as exc:
-            notifier.notify_error("job_trade.market_data", str(exc))
-            return
-
-        last = candles_1h[-1] if candles_1h else {}
-        high = float(last.get("high", price))
-        low = float(last.get("low", price))
-        # Quét SL/TP theo đường giá 1m từ lúc khớp entry (không chỉ nến 1H cuối)
-        path_1m: list[dict] = []
-        open_pos = paper.get_open_position()
-        if open_pos and open_pos.get("filled_at"):
-            try:
-                path_1m = _candles_since_fill(binance, open_pos.get("filled_at"), "1m")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("path candles since fill failed: %s", exc)
-        events = paper.on_price(
-            price, high=high, low=low, path_candles=path_1m or None
-        )
-
-        for ev in events:
-            if ev.get("event") == "filled":
-                notifier.send(
-                    "PAPER — ĐÃ KHỚP ENTRY\n"
-                    f"{ev.get('action')} khối lượng={ev.get('quantity'):.6f}\n"
-                    f"Vào={ev.get('entry')} | SL={ev.get('sl')} | TP={ev.get('tp')}\n"
-                    f"Margin={config.PAPER_MARGIN_PER_TRADE}u x{config.LEVERAGE}\n"
-                    f"{_paper_status_text(paper)}"
-                )
-            elif ev.get("event") == "closed":
-                try:
-                    handle_paper_closed(memory, llm, notifier, ev, binance)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("paper post-mortem failed")
-                    notifier.notify_error("paper_post_mortem", str(exc))
-                    notifier.send(
-                        f"PAPER ĐÓNG [{ev.get('reason')}] PnL={ev.get('pnl')} "
-                        f"số dư={ev.get('balance')}"
-                    )
-
-        if paper.has_exposure():
-            pos = paper.get_open_position()
-            pending = paper.summary().get("pending")
-            if not config.PAPER_MANAGE_ENABLED:
-                if pos:
-                    entry = float(pos["entry"])
-                    qty = float(pos["quantity"])
-                    if pos["action"] == "BUY":
-                        upnl = qty * (price - entry)
-                    else:
-                        upnl = qty * (entry - price)
-                    notifier.send(
-                        f"PAPER ĐANG MỞ {pos['action']} @ {entry}\n"
-                        f"Giá mark={price:.2f} | lãi/lỗ tạm={upnl:+.4f}u\n"
-                        f"SL={pos['stop_loss']} | TP={pos['take_profit']}\n"
-                        f"{_paper_status_text(paper)}\n"
-                        "— bỏ qua lệnh mới (manage tắt)"
-                    )
-                elif pending:
-                    notifier.send(
-                        f"PAPER CHỜ KHỚP {pending['action']} entry={pending['entry']}\n"
-                        f"Giá mark={price:.2f}\n{_paper_status_text(paper)}\n"
-                        "— bỏ qua lệnh mới (manage tắt)"
-                    )
-                return
-
-            closed = paper.closed_trades()
-            stats_txt = trade_analytics.format_stats_for_prompt(closed)
-            rules_txt = adaptive_rules.format_for_prompt()
-            manage = llm.get_manage_decision(
-                candles_4h=candles_4h,
-                candles_1h=candles_1h,
-                candles_1d=candles_1d,
-                current_price=price,
-                position=pos,
-                pending=pending if not pos else None,
-                manage_min_score=config.MANAGE_MIN_SCORE,
-                trade_stats=stats_txt,
-                adaptive_rules=rules_txt,
-            )
-            manage, reject = validate_manage_hard(
-                manage,
-                position=pos,
-                pending=pending if not pos else None,
-                mark=price,
-            )
-            extra = (
-                f"manage_score≥{config.MANAGE_MIN_SCORE} | "
-                f"primary={manage.get('primary_bias')} | "
-                f"{_paper_status_text(paper)}"
-            )
-            if reject:
-                extra += f" | bị chặn: {reject}"
-            state["last_manage"] = manage
-            _save_state(state)
-            try:
-                sum_fn = (
-                    None
-                    if manage.get("llm_error") == "rate_limit"
-                    else llm.summarize_decision_for_history
-                )
-                decision_history.append(manage, price, summarize_fn=sum_fn)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("decision_history manage append failed: %s", exc)
-            notifier.notify_manage(manage, mark=price, extra=extra)
-
-            action = str(manage.get("manage_action") or "HOLD").upper()
-            if action == "CLOSE" and pos:
-                closed = paper.close_now(price, reason="MANAGE_CLOSE")
-                if closed.get("ok"):
-                    try:
-                        handle_paper_closed(memory, llm, notifier, closed, binance)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception("manage close post-mortem failed")
-                        notifier.notify_error("paper_manage_close", str(exc))
-            elif action == "CANCEL_PENDING" and pending and not pos:
-                cancelled = paper.cancel_pending()
-                if cancelled.get("ok"):
-                    notifier.send(
-                        "PAPER — HỦY LỆNH CHỜ (manage)\n"
-                        f"{cancelled.get('pending', {}).get('action')} "
-                        f"entry={cancelled.get('pending', {}).get('entry')}\n"
-                        f"{_paper_status_text(paper)}"
-                    )
-            elif action == "TRAIL" and pos:
-                new_sl = float(manage["new_stop_loss"])
-                trailed = paper.update_stop_loss(new_sl, mark_price=price)
-                if trailed.get("ok"):
-                    notifier.send(
-                        "PAPER — TRAIL SL\n"
-                        f"{pos.get('action')} SL {trailed.get('old_sl')} → "
-                        f"{trailed.get('new_sl')} (locked_r="
-                        f"{manage.get('locked_r', '?')})\n"
-                        f"{_paper_status_text(paper)}"
-                    )
-                else:
-                    notifier.send(
-                        f"PAPER — TRAIL từ chối: {trailed.get('reason')}"
-                    )
-            logger.info(
-                "=== Paper manage done action=%s thesis=%s ===",
-                action,
-                manage.get("thesis_status"),
-            )
-            return
-
-        balance = paper.balance()
-        if balance < config.PAPER_MARGIN_PER_TRADE:
-            notifier.send(
-                f"PAPER DỪNG: số dư {balance:.2f}u < margin "
-                f"{config.PAPER_MARGIN_PER_TRADE}u — không vào lệnh mới\n"
-                f"{_paper_status_text(paper)}"
-            )
-            return
-
-        min_score = effective_min_score(memory)
-        hist_txt = decision_history.format_for_prompt(
-            decision_history.load_recent(config.DECISION_HISTORY_MAX)
-        )
-        closed = paper.closed_trades()
-        stats_txt = trade_analytics.format_stats_for_prompt(closed)
-        rules_txt = adaptive_rules.format_for_prompt()
-        # Zero-trade relief: if idle too long, allow one L2 at base score
-        last_closed = closed[-1] if closed else None
-        idle_h = trade_analytics.hours_since_iso(
-            (last_closed or {}).get("closed_at") or state.get("last_entry_at")
-        )
-        allow_l2_relief = bool(
-            idle_h is not None and idle_h >= config.ZERO_TRADE_HOURS
-        )
-        decision = llm.get_decision(
-            candles_4h=candles_4h,
-            candles_1h=candles_1h,
-            candles_1d=candles_1d,
-            current_price=price,
-            current_position=None,
-            memory_lessons=memory.get_all_lessons_summary(),
-            min_score_required=min_score,
-            decision_history=hist_txt,
-            trade_stats=stats_txt,
-            adaptive_rules=rules_txt,
-        )
-        decision, reject = validate_decision_hard(
-            decision,
-            min_score,
-            binance,
-            primary_bias=str(decision.get("primary_bias") or ""),
-            closed_trades=closed,
-            allow_l2_relief=allow_l2_relief,
-        )
-        extra = (
-            f"điểm tối thiểu={min_score} | primary={decision.get('primary_bias')} | "
-            f"bars 1D={len(candles_1d)} 4H={len(candles_4h)} 1H={len(candles_1h)} | "
-            f"{_paper_status_text(paper)}"
-        )
-        if allow_l2_relief:
-            extra += " | zero-trade relief ON"
-        if reject:
-            extra += f" | bị chặn: {reject}"
-        state["last_decision"] = decision
-        _save_state(state)
-        try:
-            sum_fn = (
-                None
-                if decision.get("llm_error") == "rate_limit"
-                else llm.summarize_decision_for_history
-            )
-            decision_history.append(decision, price, summarize_fn=sum_fn)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("decision_history append failed: %s", exc)
-        notifier.notify_decision(decision, balance=balance, extra=extra)
-
-        action = decision.get("action")
-        if action in {"BUY", "SELL"}:
-            placed = paper.place_signal(
-                action=action,
-                entry=float(decision["entry_price"]),
-                stop_loss=float(decision["stop_loss_price"]),
-                take_profit=float(decision["take_profit_price"]),
-                reasoning=str(decision.get("reasoning", "")),
-                regime=str(decision.get("market_regime", "")),
-                order_type="MARKET",
-                mark_price=price,
-                signal_level=decision.get("signal_level"),
-                win_probability=decision.get("win_probability"),
-                trigger=str(decision.get("trigger") or ""),
-                invalidation=str(decision.get("invalidation") or ""),
-                setup_tag=str(
-                    decision.get("setup_tag")
-                    or trade_analytics.setup_tag_from_decision(decision)
-                ),
-                hyp_ids_at_entry=list(decision.get("hyp_ids_applied") or []),
-            )
-            if placed.get("ok"):
-                state["last_entry_at"] = datetime.now(timezone.utc).isoformat()
-                _save_state(state)
-            if not placed.get("ok"):
-                notifier.send(f"PAPER từ chối: {placed.get('reason')}")
-            else:
-                for ev in placed.get("events") or []:
-                    if ev.get("event") == "filled":
-                        notifier.send(
-                            "PAPER — KHỚP NGAY\n"
-                            f"{action} @ {decision['entry_price']}\n"
-                            f"SL={decision['stop_loss_price']} | "
-                            f"TP={decision['take_profit_price']}\n"
-                            f"Margin={config.PAPER_MARGIN_PER_TRADE}u\n"
-                            f"{_paper_status_text(paper)}"
-                        )
-                if not placed.get("filled_immediately"):
-                    notifier.send(
-                        "PAPER — CHỜ GIÁ KHỚP ENTRY\n"
-                        f"{action} entry={decision['entry_price']}\n"
-                        f"SL={decision['stop_loss_price']} | "
-                        f"TP={decision['take_profit_price']}\n"
-                        f"Margin={config.PAPER_MARGIN_PER_TRADE}u x{config.LEVERAGE}\n"
-                        f"{_paper_status_text(paper)}"
-                    )
-        logger.info("=== Paper trade job done action=%s ===", decision.get("action"))
-        return
-
-    # --- LIVE MODE (Binance thật) ---
-    try:
-        position = binance.get_position()
-    except BinanceClientError as exc:
-        notifier.notify_error("job_trade.get_position", str(exc))
-        return
-
-    had_position = bool(state.get("had_position"))
-    if had_position and position is None:
-        logger.info("Position closed detected — running post-mortem")
-        try:
-            handle_closed_position(binance, memory, llm, notifier, state)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("post-mortem failed")
-            notifier.notify_error("post_mortem", str(exc))
-        state["had_position"] = False
-        state["position_snapshot"] = None
-        _save_state(state)
-
-    if position is not None:
-        state["had_position"] = True
-        state["position_snapshot"] = {
-            "side": position["side"],
-            "amount": position["amount"],
-            "entry_price": position["entry_price"],
-            "unrealized_pnl": position["unrealized_pnl"],
-        }
-        _save_state(state)
-        notifier.send(
-            f"Đang giữ {position['side']} khối lượng={position['amount']} "
-            f"lãi/lỗ tạm={position['unrealized_pnl']:.4f} — bỏ qua lệnh mới"
-        )
-        logger.info("Open position exists — skip entry")
-        return
-
-    try:
-        hist = candle_store.sync_all(binance)
-        candles_1d = hist["1d"]
-        candles_4h = hist["4h"]
-        candles_1h = hist["1h"]
-        price = binance.get_mark_price()
-        balance = binance.get_balance_usdt()
-    except BinanceClientError as exc:
-        notifier.notify_error("job_trade.market_data", str(exc))
-        return
-
-    min_score = effective_min_score(memory)
-    lessons = memory.get_all_lessons_summary()
-    hist_txt = decision_history.format_for_prompt(
-        decision_history.load_recent(config.DECISION_HISTORY_MAX)
-    )
-    decision = llm.get_decision(
-        candles_4h=candles_4h,
-        candles_1h=candles_1h,
-        candles_1d=candles_1d,
-        current_price=price,
-        current_position=None,
-        memory_lessons=lessons,
-        min_score_required=min_score,
-        decision_history=hist_txt,
-        trade_stats="(live mode — paper TRADE_STATS không áp dụng)",
-        adaptive_rules=adaptive_rules.format_for_prompt(),
-    )
-    decision, reject = validate_decision_hard(
-        decision,
-        min_score,
-        binance,
-        primary_bias=str(decision.get("primary_bias") or ""),
-        closed_trades=[],
-    )
-    extra = (
-        f"điểm tối thiểu={min_score} | primary={decision.get('primary_bias')} | "
-        f"bars 1D={len(candles_1d)} 4H={len(candles_4h)} 1H={len(candles_1h)}"
-    )
-    if reject:
-        extra += f" | bị chặn: {reject}"
-
-    state["last_decision"] = decision
-    _save_state(state)
-    try:
-        sum_fn = (
-            None
-            if decision.get("llm_error") == "rate_limit"
-            else llm.summarize_decision_for_history
-        )
-        decision_history.append(decision, price, summarize_fn=sum_fn)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("decision_history append failed: %s", exc)
-    notifier.notify_decision(decision, balance=balance, extra=extra)
-
-    action = decision.get("action")
-    if action in {"BUY", "SELL"}:
-        try:
-            result = binance.open_bracket(
-                action=action,
-                entry_price=float(decision["entry_price"]),
-                stop_loss_price=float(decision["stop_loss_price"]),
-                take_profit_price=float(decision["take_profit_price"]),
-                balance=balance,
-            )
-            state["had_position"] = True
-            state["position_snapshot"] = {
-                "side": action,
-                "amount": result.get("quantity"),
-                "entry_price": decision["entry_price"],
-                "unrealized_pnl": 0.0,
-            }
-            _save_state(state)
-            notifier.send(
-                f"ĐÃ ĐẶT LỆNH {action} khối lượng={result.get('quantity')} "
-                f"SL={result.get('stop_loss')} | TP={result.get('take_profit')}"
-            )
-        except BinanceClientError as exc:
-            logger.exception("open_bracket failed")
-            notifier.notify_error("open_bracket", str(exc))
-
-    logger.info("=== Trade job done action=%s ===", decision.get("action"))
+        logger.error("paper tick error: %s\n%s", exc, traceback.format_exc())
+        notifier.notify_error("job_paper_tick", str(exc))
 
 
 def job_learn(notifier: Notifier) -> None:
     try:
         msg = run_learner_crawler()
         logger.info(msg)
-        notifier.send(f"Learner: {msg}")
+        notifier.send(f"Learner (research context): {msg}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("learner job failed")
         notifier.notify_error("learner", str(exc))
@@ -1241,18 +202,17 @@ def job_news(notifier: Notifier) -> None:
     try:
         msg = run_news_crawler()
         logger.info(msg)
-        notifier.send(f"Tin tức: {msg}")
+        notifier.send(f"News (research context): {msg}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("news job failed")
         notifier.notify_error("news", str(exc))
 
 
 def job_compact(memory: MemoryManager, notifier: Notifier) -> None:
-    """Hourly probe; only compact at Sunday 00:00–00:59 UTC."""
     now = datetime.now(timezone.utc)
     if now.weekday() != 6 or now.hour != 0:
         return
-    state = _load_state()
+    state = _load_runtime()
     stamp = now.strftime("%Y-%W")
     if state.get("last_compact_week") == stamp:
         return
@@ -1261,132 +221,72 @@ def job_compact(memory: MemoryManager, notifier: Notifier) -> None:
         logger.info(msg)
         notifier.send(f"Memory: {msg}")
         state["last_compact_week"] = stamp
-        _save_state(state)
+        _save_runtime(state)
     except Exception as exc:  # noqa: BLE001
         logger.exception("compact failed")
         notifier.notify_error("compact", str(exc))
 
 
-def safe_trade_job(
-    binance: BinanceClient,
-    memory: MemoryManager,
-    llm: LLMAgent,
-    notifier: Notifier,
-    paper: PaperPortfolio | None = None,
-) -> None:
-    try:
-        job_trade(binance, memory, llm, notifier, paper=paper)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Unhandled trade job error: %s\n%s", exc, traceback.format_exc())
-        notifier.notify_error("job_trade", f"{exc}\n{traceback.format_exc()[-800:]}")
-
-
 def main() -> None:
-    logger.info("Starting BTC Dow/PA Mono-Agent")
-    # Restore decision history + paper account from GitHub if local empty
-    # (Blitz rebuild wipes generated/ — keep balance/days across rebuilds)
+    logger.info("Starting Champion Research Agent (live data, PAPER fills only)")
+    if not config.PAPER_MODE or not config.FORCE_PAPER_ONLY:
+        logger.warning(
+            "PAPER_MODE/FORCE_PAPER_ONLY expected true — enforcing paper-only semantics"
+        )
+
     try:
-        restored = decision_history.ensure_restored()
-        if restored:
-            logger.info("Restored %d decision_history rows from remote", restored)
+        archived = archive_learn_state()
+        if archived:
+            logger.info("Archived legacy learn state → %s", archived)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("decision_history restore skipped: %s", exc)
-    try:
-        if config.PAPER_MODE and paper_portfolio_mod.ensure_restored():
-            logger.info("Restored paper_account from remote")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("paper_account restore skipped: %s", exc)
-    try:
-        if memory_manager_mod.ensure_restored():
-            logger.info("Restored memory.json from remote")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("memory restore skipped: %s", exc)
-    try:
-        if adaptive_rules.restore_from_remote():
-            logger.info("Restored adaptive_rules from remote")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("adaptive_rules restore skipped: %s", exc)
-    try:
-        if hypothesis_store.restore_from_remote():
-            logger.info("Restored hypotheses from remote")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("hypotheses restore skipped: %s", exc)
-    try:
-        n_mig = hypothesis_store.migrate_from_adaptive_rules()
-        if n_mig:
-            logger.info("Migrated %d adaptive rules → hypotheses", n_mig)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("hypothesis migrate skipped: %s", exc)
+        logger.warning("archive_learn_state skipped: %s", exc)
+
+    champion_store.init_db()
     memory = MemoryManager()
-    llm = LLMAgent()
     notifier = Notifier()
-    paper = PaperPortfolio() if config.PAPER_MODE else None
 
-    try:
-        binance = BinanceClient()
-    except BinanceClientError as exc:
-        logger.error("Cannot init Binance client: %s", exc)
-        notifier.notify_error("startup", str(exc))
-        raise SystemExit(1) from exc
-
-    # Optional 1-month historical replay on Blitz (once; seed memory then live)
-    if config.REPLAY_ON_START:
-        try:
-            from modules.replay_engine import maybe_run_replay_on_start
-
-            maybe_run_replay_on_start(binance, llm, notifier)
-            # Reload memory/rules after seed
-            memory = MemoryManager()
-            if config.PAPER_MODE:
-                paper = PaperPortfolio()
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("replay on start failed: %s", exc)
-            notifier.notify_error("replay_on_start", str(exc))
-
-    # Schedule jobs — align to clock so each run is after H1 close (HH:00)
-    at_mm = f":{config.DECISION_AT_MINUTE:02d}"
-    schedule.every().hour.at(at_mm).do(
-        safe_trade_job, binance, memory, llm, notifier, paper
+    start_msg = (
+        f"Champion Agent khởi động {datetime.now(timezone.utc).isoformat()} UTC\n"
+        f"Mode=PAPER ONLY (live Binance data, NO live orders)\n"
+        f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN}\n"
+        f"Research every {config.RESEARCH_EVERY_HOURS}h | "
+        f"Paper poll {config.PAPER_POLL_SECONDS}s\n"
+        f"Capital={config.INITIAL_CAPITAL:.0f}u | "
+        f"margin≤{config.MAX_MARGIN_FRACTION*100:.0f}% equity | "
+        f"lev candidates={list(config.LEVERAGE_CANDIDATES)}\n"
+        f"DB={config.RESEARCH_DB_PATH}"
     )
+    trader = PaperChampion()
+    s = trader.summary()
+    start_msg += (
+        f"\nEquity={s['equity']:.2f}u PnL={s['pnl_total']:+.2f}u "
+        f"trades={s['trade_count']} champion={s['champion_family'] or 'NONE'}"
+    )
+    notifier.send(start_msg)
+
+    # Immediate context + research + first paper tick
+    job_learn(notifier)
+    job_news(notifier)
+    job_research(notifier, memory)
+    job_paper_tick(notifier, memory)
+
     schedule.every(24).hours.do(job_learn, notifier)
     schedule.every(24).hours.do(job_news, notifier)
     schedule.every().hour.do(job_compact, memory, notifier)
+
     logger.info(
-        "Trade job scheduled every hour at HH%s UTC (H1 close=:00)",
-        at_mm,
+        "Entering loop: paper tick every %ss; research every %sh or on decay",
+        config.PAPER_POLL_SECONDS,
+        config.RESEARCH_EVERY_HOURS,
     )
-
-    start_msg = (
-        f"Bot khởi động lúc {datetime.now(timezone.utc).isoformat()} UTC\n"
-        f"Cặp={config.SYMBOL} | Đòn bẩy={config.LEVERAGE}x | "
-        f"Chu kỳ quyết định=mỗi giờ lúc HH{at_mm} UTC "
-        f"(sau đóng nến 1H)\n"
-    )
-    if config.PAPER_MODE and paper:
-        s = paper.summary()
-        start_msg += (
-            "Chế độ=PAPER (không đặt lệnh Binance)\n"
-            f"Vốn đầu={s['initial_balance']:.0f}u | Margin/lệnh={config.PAPER_MARGIN_PER_TRADE:.0f}u\n"
-            f"Số dư hiện tại={s['balance']:.2f}u | PnL={s['pnl_total']:+.2f}u\n"
-            f"Ngày chạy={s['days_elapsed']:.1f}/30 — theo dõi số dư sau 1 tháng"
-        )
-    else:
-        start_msg += "Chế độ=LIVE"
-    notifier.send(start_msg)
-
-    # Run once immediately on startup
-    job_learn(notifier)
-    job_news(notifier)
-    safe_trade_job(binance, memory, llm, notifier, paper)
-
-    logger.info("Entering schedule loop")
     while True:
         try:
             schedule.run_pending()
+            job_paper_tick(notifier, memory)
         except Exception as exc:  # noqa: BLE001
-            logger.error("schedule loop error: %s", exc)
-            notifier.notify_error("schedule_loop", str(exc))
-        time.sleep(1)
+            logger.error("main loop error: %s", exc)
+            notifier.notify_error("main_loop", str(exc))
+        time.sleep(config.PAPER_POLL_SECONDS)
 
 
 if __name__ == "__main__":

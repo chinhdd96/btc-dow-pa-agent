@@ -432,6 +432,12 @@ class BinanceClient:
         take_profit_price: float,
         balance: float | None = None,
     ) -> dict[str, Any]:
+        # Champion Research Agent: live orders hard-disabled (paper fills only).
+        if getattr(config, "FORCE_PAPER_ONLY", True) or self.paper_mode:
+            raise BinanceClientError(
+                "Live open_bracket disabled — PAPER Champion mode only "
+                "(FORCE_PAPER_ONLY / PAPER_MODE)"
+            )
         action = action.upper()
         if action not in {"BUY", "SELL"}:
             raise BinanceClientError(f"Invalid action for open_bracket: {action}")
