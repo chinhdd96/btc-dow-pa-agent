@@ -8,6 +8,8 @@ LLM đề xuất → Evolution + backtest + validation → Champion
   → Paper (Python) → Post-mortem / decay → Research lại
 ```
 
+**Timeframe:** entry trên nến **15m** đã đóng (`TIMEFRAME_MAIN=15m`). Bias HTF: **1h / 4h / 1d**. Signal nến T → fill open nến T+1 (~15 phút sau); không trade nến đang forming.
+
 ---
 
 ## 1. Cài đặt
@@ -29,6 +31,9 @@ pip install -r requirements.txt
 | `PAPER_MODE=true` | Bắt buộc phase này |
 | `INITIAL_CAPITAL` | Vốn paper (mặc định 1000) |
 | `LEVERAGE_CANDIDATES` | Ví dụ `1,2,3,5,10` |
+| `TIMEFRAME_MAIN` | TF vào lệnh (mặc định `15m`) |
+| `TIMEFRAME_MID` / `TREND` / `HTF` | Bias filter (`1h` / `4h` / `1d`) |
+| `HISTORY_DAYS` | Research lookback (15m mặc định 180) |
 | `RESEARCH_EVERY_HOURS` | Chu kỳ research (mặc định 24) |
 | `PAPER_POLL_SECONDS` | Poll nến live (mặc định 20) |
 

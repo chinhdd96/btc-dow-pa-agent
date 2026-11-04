@@ -147,7 +147,8 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
         if due or (time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600):
             job_research(notifier, memory)
 
-        days = max(30, min(config.HISTORY_DAYS, 90))
+        # 15m: keep enough bars for indicators (~14d min); cap fetch for poll latency
+        days = max(14, min(config.HISTORY_DAYS, 45 if config.TIMEFRAME_MAIN.endswith("m") else 90))
         bars = fetch_klines(config.TIMEFRAME_MAIN, days, config.SYMBOL)
         bars = enrich_derivatives_data(bars, config.SYMBOL, days)
         bars = enrich_multi_timeframe(bars, config.SYMBOL, days)

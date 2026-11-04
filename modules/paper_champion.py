@@ -29,6 +29,20 @@ class PaperChampion:
         self.state = champion_store.get_paper_state()
         if "equity" not in self.state:
             self.state["equity"] = config.INITIAL_CAPITAL
+        # Drop Champion trained on another TF (e.g. 1h → 15m switch)
+        if self.state.get("timeframe") != config.TIMEFRAME_MAIN:
+            if self.state.get("champion"):
+                logger.warning(
+                    "Clearing Champion: timeframe %s → %s",
+                    self.state.get("timeframe"),
+                    config.TIMEFRAME_MAIN,
+                )
+            self.state["champion"] = None
+            self.state["pending"] = None
+            self.state["position"] = None
+            self.state["timeframe"] = config.TIMEFRAME_MAIN
+            self.state["research_due"] = True
+            champion_store.set_paper_state(self.state)
         self.on_close = on_close
         self.on_open = on_open
         self._closed_this_tick: list[dict] = []
@@ -41,6 +55,7 @@ class PaperChampion:
 
     def set_champion(self, genome: Genome, *, baseline_expectancy: float | None = None) -> None:
         self.state["champion"] = asdict(genome)
+        self.state["timeframe"] = config.TIMEFRAME_MAIN
         if baseline_expectancy is not None:
             self.state["champion_baseline_expectancy"] = baseline_expectancy
         self.state["research_due"] = False

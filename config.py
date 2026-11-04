@@ -8,9 +8,12 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 
 SYMBOL = "BTCUSDT"
-TIMEFRAME_MAIN = "1h"
-TIMEFRAME_TREND = "4h"
-TIMEFRAME_HTF = "1d"  # primary regime như trader thực
+# Champion entry TF — 15m for faster paper signals; override via env if needed
+TIMEFRAME_MAIN = (os.getenv("TIMEFRAME_MAIN", "15m").strip() or "15m")
+TIMEFRAME_TREND = os.getenv("TIMEFRAME_TREND", "4h").strip() or "4h"
+TIMEFRAME_HTF = os.getenv("TIMEFRAME_HTF", "1d").strip() or "1d"  # primary regime
+# Intermediate HTF when main is sub-hour (15m → 1h bias filter)
+TIMEFRAME_MID = os.getenv("TIMEFRAME_MID", "1h").strip() or "1h"
 LEVERAGE = 3
 RISK_PER_TRADE_PCT = 0.015
 MAX_CONSECUTIVE_LOSSES = 2
@@ -187,7 +190,9 @@ MAX_MARGIN_FRACTION = float(os.getenv("MAX_MARGIN_FRACTION", "0.10"))
 FEE_RATE = float(os.getenv("FEE_RATE", "0.0005"))
 SLIPPAGE_RATE = float(os.getenv("SLIPPAGE_RATE", "0.0002"))
 MAINTENANCE_MARGIN_RATE = float(os.getenv("MAINTENANCE_MARGIN_RATE", "0.005"))
-HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "730"))
+# 15m history default shorter (730d×96 bars ≈ 70k — quá nặng research trên free plan)
+_HISTORY_DEFAULT = "180" if TIMEFRAME_MAIN in {"1m", "3m", "5m", "15m", "30m"} else "730"
+HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", _HISTORY_DEFAULT))
 POPULATION_SIZE = int(os.getenv("POPULATION_SIZE", "36"))
 GENERATIONS = int(os.getenv("GENERATIONS", "12"))
 ELITE_FRACTION = float(os.getenv("ELITE_FRACTION", "0.20"))

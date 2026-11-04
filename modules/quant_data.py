@@ -316,6 +316,44 @@ def enrich_derivatives_data(
     return x.reset_index(drop=True)
 
 
+_INTERVAL_TD = {
+    "1m": pd.Timedelta(minutes=1),
+    "3m": pd.Timedelta(minutes=3),
+    "5m": pd.Timedelta(minutes=5),
+    "15m": pd.Timedelta(minutes=15),
+    "30m": pd.Timedelta(minutes=30),
+    "1h": pd.Timedelta(hours=1),
+    "2h": pd.Timedelta(hours=2),
+    "4h": pd.Timedelta(hours=4),
+    "1d": pd.Timedelta(days=1),
+}
+
+
+def _htf_enrich_stack(main_interval: str | None = None) -> list[tuple[str, pd.Timedelta, str]]:
+    """Higher-TF bias columns attached to the main trading interval."""
+    main = (main_interval or config.TIMEFRAME_MAIN).strip()
+    stack: list[tuple[str, pd.Timedelta, str]] = []
+    # Sub-hour entries (e.g. 15m): also attach 1h mid-TF
+    if main in {"1m", "3m", "5m", "15m", "30m"}:
+        mid = getattr(config, "TIMEFRAME_MID", "1h") or "1h"
+        if mid != main:
+            stack.append((mid, _INTERVAL_TD.get(mid, pd.Timedelta(hours=1)), "htf1"))
+    trend = getattr(config, "TIMEFRAME_TREND", "4h") or "4h"
+    htf = getattr(config, "TIMEFRAME_HTF", "1d") or "1d"
+    if trend != main:
+        stack.append((trend, _INTERVAL_TD.get(trend, pd.Timedelta(hours=4)), "htf4"))
+    if htf != main:
+        stack.append((htf, _INTERVAL_TD.get(htf, pd.Timedelta(days=1)), "htf1d"))
+    seen: set[str] = set()
+    out: list[tuple[str, pd.Timedelta, str]] = []
+    for item in stack:
+        if item[0] in seen:
+            continue
+        seen.add(item[0])
+        out.append(item)
+    return out
+
+
 def enrich_multi_timeframe(
     candles: pd.DataFrame,
     symbol: str | None = None,
@@ -323,10 +361,7 @@ def enrich_multi_timeframe(
 ) -> pd.DataFrame:
     symbol = symbol or config.SYMBOL
     x = candles.sort_values("open_time").copy()
-    for interval, duration, prefix in [
-        ("4h", pd.Timedelta(hours=4), "htf4"),
-        ("1d", pd.Timedelta(days=1), "htf1d"),
-    ]:
+    for interval, duration, prefix in _htf_enrich_stack():
         try:
             higher = fetch_klines(interval, days, symbol)
             higher["fast"] = higher.close.ewm(

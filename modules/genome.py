@@ -247,10 +247,15 @@ def make_signal(row: pd.Series, prev: pd.Series, g: Genome) -> Optional[int]:
 def mtf_side_allowed(row: pd.Series, side: Optional[int], enabled: bool) -> bool:
     if side is None or not enabled:
         return side is not None
-    h4, d1 = row.get("htf4_bull", np.nan), row.get("htf1d_bull", np.nan)
-    if pd.isna(h4) or pd.isna(d1):
+    # Align with every available HTF bias column (15m→1h/4h/1d; 1h→4h/1d)
+    biases: list[bool] = []
+    for col in ("htf1_bull", "htf4_bull", "htf1d_bull"):
+        v = row.get(col, np.nan)
+        if pd.notna(v):
+            biases.append(bool(v))
+    if not biases:
         return False
-    return bool(h4) and bool(d1) if side == 1 else (not bool(h4) and not bool(d1))
+    return all(biases) if side == 1 else all(not b for b in biases)
 
 
 def genome_from_dict(d: dict) -> Genome | None:
