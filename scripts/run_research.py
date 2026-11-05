@@ -35,7 +35,9 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "champion": report.get("champion"),
+                "champion_spec": report.get("champion_spec"),
+                "champion_spec_id": report.get("champion_spec_id")
+                or (report.get("champion_evaluation") or {}).get("spec_id"),
                 "champion_evaluation": report.get("champion_evaluation"),
                 "ai_review": report.get("ai_review"),
                 "top_candidates": (report.get("top_candidates") or [])[:5],

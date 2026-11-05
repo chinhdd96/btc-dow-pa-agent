@@ -67,12 +67,15 @@ def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
     try:
         logger.info("=== Research job start ===")
         report = run_research(use_llm=config.LLM_RESEARCH_ENABLED)
-        champ = report.get("champion") or {}
+        champ_spec = report.get("champion_spec") or {}
         review = report.get("ai_review") or {}
+        ev = report.get("champion_evaluation") or {}
         msg = (
-            "RESEARCH xong (PAPER only)\n"
-            f"Champion={champ.get('family') or 'NONE'} "
-            f"id={(report.get('champion_evaluation') or {}).get('genome_id') or '—'}\n"
+            "RESEARCH Spec xong (PAPER only | PnL-first)\n"
+            f"Spec={champ_spec.get('name') or 'NONE'} "
+            f"id={ev.get('spec_id') or report.get('champion_spec_id') or '—'}\n"
+            f"mode={report.get('config', {}).get('research_mode') or '—'} "
+            f"promote={report.get('promote_mode')}\n"
             f"Qualified top={sum(1 for c in report.get('top_candidates') or [] if c.get('qualified'))}\n"
             f"AI review: {(review.get('summary') or '')[:400]}"
         )
@@ -129,7 +132,22 @@ def _handle_closed_trade(
     if pm.get("decay_signal"):
         st = champion_store.get_paper_state()
         st["research_due"] = True
+        st["research_mode"] = "replace"
         champion_store.set_paper_state(st)
+
+    # Spec patch/replace cadence by trades on current Spec (PnL learning)
+    st_n = champion_store.get_paper_state()
+    trades_on = int(st_n.get("trades_on_spec") or 0)
+    last_sr = float(st_n.get("last_spec_research_ts") or 0)
+    cooled = (time.time() - last_sr) >= config.SPEC_PATCH_COOLDOWN_HOURS * 3600
+    if cooled and trades_on >= config.SPEC_REPLACE_MIN_TRADES:
+        st_n["research_due"] = True
+        st_n["research_mode"] = "replace"
+        champion_store.set_paper_state(st_n)
+    elif cooled and trades_on >= config.SPEC_PATCH_MIN_TRADES:
+        st_n["research_due"] = True
+        st_n["research_mode"] = "patch"
+        champion_store.set_paper_state(st_n)
 
     decay = strategy_decay.check_decay()
     side = "LONG" if trade.get("side") == 1 else "SHORT"
@@ -313,10 +331,11 @@ def main() -> None:
     notifier = Notifier()
 
     start_msg = (
-        f"Champion Agent khởi động {datetime.now(timezone.utc).isoformat()} UTC\n"
-        f"Mode=PAPER ONLY (live Binance data, NO live orders)\n"
+        f"Champion Spec Agent khởi động {datetime.now(timezone.utc).isoformat()} UTC\n"
+        f"Mode=PAPER ONLY | Mission=PnL dương (accept risk in bounds)\n"
         f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN}\n"
         f"Research every {config.RESEARCH_EVERY_HOURS}h | "
+        f"patch≥{config.SPEC_PATCH_MIN_TRADES} replace≥{config.SPEC_REPLACE_MIN_TRADES} trades\n"
         f"Paper poll {config.PAPER_POLL_SECONDS}s\n"
         f"Capital={config.INITIAL_CAPITAL:.0f}u | "
         f"margin≤{config.MAX_MARGIN_FRACTION*100:.0f}% equity | "
@@ -327,7 +346,8 @@ def main() -> None:
     s = trader.summary()
     start_msg += (
         f"\nEquity={s['equity']:.2f}u PnL={s['pnl_total']:+.2f}u "
-        f"trades={s['trade_count']} champion={s['champion_family'] or 'NONE'}"
+        f"trades={s['trade_count']} on_spec={s.get('trades_on_spec', 0)} "
+        f"spec={s['champion_family'] or 'NONE'} id={s['champion_id'] or '—'}"
     )
     notifier.send(start_msg)
 

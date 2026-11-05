@@ -233,6 +233,10 @@ STARVE_TRIGGER_RESEARCH = os.getenv(
     "STARVE_TRIGGER_RESEARCH", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 STARVE_COOLDOWN_HOURS = float(os.getenv("STARVE_COOLDOWN_HOURS", "6"))
+# Strategy Spec learning cadence (catalog indicators) — PnL-first, not flat-first
+SPEC_PATCH_MIN_TRADES = int(os.getenv("SPEC_PATCH_MIN_TRADES", "12"))
+SPEC_REPLACE_MIN_TRADES = int(os.getenv("SPEC_REPLACE_MIN_TRADES", "20"))
+SPEC_PATCH_COOLDOWN_HOURS = float(os.getenv("SPEC_PATCH_COOLDOWN_HOURS", "6"))
 PAPER_POLL_SECONDS = int(os.getenv("PAPER_POLL_SECONDS", "20"))
 RESEARCH_EVERY_HOURS = float(os.getenv("RESEARCH_EVERY_HOURS", "24"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))

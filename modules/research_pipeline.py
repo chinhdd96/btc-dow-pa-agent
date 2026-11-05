@@ -1,21 +1,34 @@
-"""End-to-end research: data → evolution → AI review → promote."""
+"""End-to-end research: data → Spec evolution → AI review → promote (PnL-first)."""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import config
 from modules import champion_store
-from modules.evolution import StrategyEvolution, maybe_promote
-from modules.genome import Genome
-from modules.llm_researcher import propose_genomes, review_research_report
+from modules import tick_history
+from modules.llm_researcher import (
+    propose_spec_patch,
+    propose_specs,
+    review_research_report,
+)
 from modules.paper_champion import PaperChampion
 from modules.quant_data import fetch_market_snapshot, load_research_frame
-from modules import tick_history
+from modules.spec_evolution import (
+    SpecEvolution,
+    maybe_promote_spec,
+    patched_specs_from_llm,
+)
+from modules.strategy_spec import (
+    genome_dict_to_spec,
+    loosen_spec_for_starve,
+    normalize_spec,
+    spec_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +39,12 @@ def run_research(*, use_llm: bool | None = None) -> dict:
     Path(config.RESEARCH_REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "Fetching %s %s candles for %d days",
+        "Fetching %s %s candles for %d days (Spec research)",
         config.SYMBOL,
         config.TIMEFRAME_MAIN,
         config.HISTORY_DAYS,
     )
     data = load_research_frame(config.HISTORY_DAYS, config.TIMEFRAME_MAIN)
-    # Need enough bars for indicator warm-up + train/val/test (spot fallback may be thinner)
     min_bars = 800
     if len(data) < min_bars:
         raise RuntimeError(f"Insufficient history: {len(data)} candles (need >= {min_bars})")
@@ -52,41 +64,75 @@ def run_research(*, use_llm: bool | None = None) -> dict:
     state = champion_store.get_paper_state()
     focus = list(state.get("next_research_focus") or [])
     starve = tick_history.starvation_report()
-    focus = list(dict.fromkeys([*focus, *(state.get("starve_focus") or []), *starve.get("focus") or []]))
-
-    tick_ctx = tick_history.format_for_prompt()
-    starve_seeds = tick_history.challenger_genomes_from_starvation(
-        state.get("champion"),
-        report=starve,
+    focus = list(
+        dict.fromkeys(
+            [*focus, *(state.get("starve_focus") or []), *(starve.get("focus") or [])]
+        )
     )
-    if starve_seeds:
-        logger.info(
-            "Starvation seeds=%d | %s",
-            len(starve_seeds),
-            starve.get("summary"),
-        )
+    tick_ctx = tick_history.format_for_prompt()
+    research_mode = str(state.get("research_mode") or "replace")
+    # Auto mode from trade counts (PnL-first learning cadence)
+    trades_on = int(state.get("trades_on_spec") or 0)
+    if trades_on >= config.SPEC_REPLACE_MIN_TRADES:
+        research_mode = "replace"
+    elif trades_on >= config.SPEC_PATCH_MIN_TRADES:
+        research_mode = research_mode if research_mode in {"patch", "replace"} else "patch"
 
-    proposals: list[Genome] = []
+    current_spec = state.get("champion_spec")
+    if not current_spec and state.get("champion"):
+        try:
+            current_spec = genome_dict_to_spec(state["champion"])
+        except Exception:
+            current_spec = None
+
+    llm_specs: list[dict] = []
+    patch_cands: list[dict] = []
+    seed_specs: list[dict] = []
+
+    if current_spec and starve.get("starving"):
+        seed_specs.append(loosen_spec_for_starve(current_spec))
+
     if use_llm:
-        proposals = propose_genomes(
-            market_summary,
-            count=max(8, config.POPULATION_SIZE // 3),
-            research_focus=focus,
-            tick_history_text=tick_ctx,
-            starvation=starve,
-        )
+        if research_mode == "patch" and current_spec:
+            patches = propose_spec_patch(
+                current_spec,
+                paper_stats={
+                    "trades_on_spec": trades_on,
+                    "trade_count": state.get("trade_count"),
+                    "equity": state.get("equity"),
+                    "baseline_expectancy": state.get("champion_baseline_expectancy"),
+                },
+                tick_history_text=tick_ctx,
+            )
+            patch_cands = patched_specs_from_llm(current_spec, patches)
+            # Also allow a few fresh specs so search does not stall
+            llm_specs = propose_specs(
+                market_summary,
+                count=max(4, config.POPULATION_SIZE // 6),
+                research_focus=focus,
+                tick_history_text=tick_ctx,
+                starvation=starve,
+            )
+        else:
+            llm_specs = propose_specs(
+                market_summary,
+                count=max(8, config.POPULATION_SIZE // 3),
+                research_focus=focus,
+                tick_history_text=tick_ctx,
+                starvation=starve,
+            )
 
-    evolution = StrategyEvolution(
-        llm_proposals=proposals,
-        seed_genomes=starve_seeds,
+    evolution = SpecEvolution(
+        llm_specs=llm_specs,
+        seed_specs=seed_specs,
+        patch_candidates=patch_cands,
     )
     ranked = evolution.research(data)
 
     trader = PaperChampion()
-    current = trader.state.get("champion")
-    selected = maybe_promote(
+    selected = maybe_promote_spec(
         ranked,
-        current,
+        current_spec,
         starving=bool(starve.get("starving")),
         paper_trade_count=int(state.get("trade_count") or 0),
     )
@@ -94,17 +140,21 @@ def run_research(*, use_llm: bool | None = None) -> dict:
     baseline_exp = None
     if selected:
         eval_row = next(
-            (r for r in ranked if r["genome_id"] == selected.genome_id), None
+            (r for r in ranked if r["spec_id"] == spec_id(selected)),
+            None,
         )
         if eval_row:
-            # Prefer test expectancy as promote baseline for decay detection
             baseline_exp = float(eval_row["test"].get("expectancy") or 0)
-        trader.set_champion(selected, baseline_expectancy=baseline_exp)
-        # Clear spent challenger hints after a research cycle
+        trader.set_champion_spec(selected, baseline_expectancy=baseline_exp)
         st = champion_store.get_paper_state()
         st["challenger_hints"] = []
         st["research_due"] = False
+        st["research_mode"] = None
         st["starve_focus"] = []
+        st["last_spec_research_ts"] = time.time()
+        st["explore_mode"] = bool(starve.get("starving")) and not (
+            eval_row and eval_row.get("qualified")
+        )
         champion_store.set_paper_state(st)
 
     soft_used = bool(
@@ -113,29 +163,29 @@ def run_research(*, use_llm: bool | None = None) -> dict:
             (
                 r
                 for r in ranked
-                if r["genome_id"] == selected.genome_id and r.get("soft_qualified")
+                if r["spec_id"] == spec_id(selected) and r.get("soft_qualified")
             ),
             None,
         )
     )
     report_lite = {
         "bars": len(data),
-        "champion": asdict(selected) if selected else None,
+        "champion_spec": normalize_spec(selected) if selected else None,
+        "champion_spec_id": spec_id(selected) if selected else None,
         "promote_mode": (
-            "soft"
-            if soft_used
-            else ("hard" if selected else "none")
+            "soft" if soft_used else ("hard" if selected else "none")
         ),
+        "research_mode": research_mode,
         "tick_history": tick_ctx,
         "starvation": starve,
         "research_focus": focus,
         "top_candidates": [
             {
-                "genome_id": r["genome_id"],
+                "spec_id": r["spec_id"],
+                "name": r.get("name"),
                 "qualified": r["qualified"],
                 "soft_qualified": bool(r.get("soft_qualified")),
                 "robust_score": r["robust_score"],
-                "family": r["genome"].get("family"),
                 "validation": r["validation"],
                 "test": r["test"],
             }
@@ -157,7 +207,7 @@ def run_research(*, use_llm: bool | None = None) -> dict:
         champion_store.set_paper_state(st)
 
     report = {
-        "version": "champion-1.0",
+        "version": "champion-spec-1.0",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "config": {
             "symbol": config.SYMBOL,
@@ -169,19 +219,23 @@ def run_research(*, use_llm: bool | None = None) -> dict:
             "generations": config.GENERATIONS,
             "leverage_candidates": list(config.LEVERAGE_CANDIDATES),
             "llm_enabled": use_llm,
+            "research_mode": research_mode,
+            "mission": "pnl_positive_priority",
         },
         "market_snapshot": fetch_market_snapshot(config.SYMBOL),
         "bars": len(data),
-        "champion": asdict(selected) if selected else None,
+        "champion": None,  # legacy field unused
+        "champion_spec": normalize_spec(selected) if selected else None,
         "champion_evaluation": next(
-            (r for r in ranked if selected and r["genome_id"] == selected.genome_id),
+            (r for r in ranked if selected and r["spec_id"] == spec_id(selected)),
             None,
         ),
         "top_candidates": ranked[:20],
         "ai_review": ai_review,
         "qualification_note": (
-            "Hard: val+test expectancy>0, PF>1.05, min trades. "
-            "Soft (PAPER_SOFT_PROMOTE): lower trade mins, PF>=floor, either-split expectancy>0."
+            "Spec path: hard val+test expectancy>0 PF>1.05; "
+            "soft promote keeps trading for PnL learning. "
+            "No perpetual flat — starve loosens/researches specs."
         ),
         "promote_mode": report_lite["promote_mode"],
         "execution_mode": "PAPER_ONLY; live trading is hard-disabled",
@@ -190,8 +244,8 @@ def run_research(*, use_llm: bool | None = None) -> dict:
         json.dump(report, f, ensure_ascii=False, indent=2, default=str)
     champion_store.save_research(report)
     logger.info(
-        "Research complete. Champion=%s report=%s",
-        selected.genome_id if selected else None,
+        "Research complete. Spec=%s report=%s",
+        spec_id(selected) if selected else None,
         config.RESEARCH_REPORT_PATH,
     )
     return report

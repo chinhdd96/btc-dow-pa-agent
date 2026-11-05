@@ -50,6 +50,8 @@ def _snapshot() -> dict[str, Any]:
         "symbol": config.SYMBOL,
         "timeframe": config.TIMEFRAME_MAIN,
         "paper_state": state,
+        "champion_spec": state.get("champion_spec"),
+        "champion_spec_id": state.get("champion_spec_id"),
         "paper_trades": trades,
         "tick_history": ticks,
     }
@@ -61,8 +63,9 @@ def _local_is_empty() -> bool:
     has_champ = bool(st.get("champion"))
     trades = int(st.get("trade_count") or 0)
     ticks = tick_history.load_recent(n=5)
-    # Fresh DB default equity + no champion + no ticks → treat as empty
-    return (not has_champ) and trades <= 0 and not ticks
+    has_spec = bool(st.get("champion_spec"))
+    # Fresh DB default equity + no champion/spec + no ticks → treat as empty
+    return (not has_champ and not has_spec) and trades <= 0 and not ticks
 
 
 def _apply_snapshot(data: dict[str, Any]) -> bool:

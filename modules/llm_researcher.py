@@ -175,6 +175,154 @@ def propose_genomes(
     return proposals
 
 
+def propose_specs(
+    market_summary: dict,
+    count: int = 8,
+    *,
+    research_focus: list[str] | None = None,
+    tick_history_text: str | None = None,
+    starvation: dict | None = None,
+) -> list[dict]:
+    """LLM proposes Strategy Specs from indicator catalog (PnL-first, no forever-flat)."""
+    if not config.LLM_RESEARCH_ENABLED:
+        return []
+    from modules.indicator_catalog import catalog_for_prompt
+    from modules.strategy_spec import normalize_spec, validate_spec
+
+    ctx = _load_research_context()
+    starve = starvation or {}
+    prompt = {
+        "task": (
+            "MISSION: positive expectancy / PnL after fees on BTCUSDT paper. "
+            "Propose Strategy Specs by COMBINING catalog indicators (classic methods OK). "
+            "Do NOT recommend standing aside forever or HOLD-only strategies. "
+            "If starving (chronic SKIP), propose LOOSER filters and alternate indicators "
+            "so the system can take learnable trades. JSON only."
+        ),
+        "mission": "pnl_positive_priority_accept_controlled_risk",
+        "market_summary": market_summary,
+        "research_focus": research_focus or [],
+        "starvation": starve,
+        "market_notes": ctx["combined"],
+        "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
+        "catalog": catalog_for_prompt(),
+        "leverage_candidates": list(config.LEVERAGE_CANDIDATES),
+        "output_schema": {
+            "specs": [
+                {
+                    "name": "rsi_ema_example",
+                    "entry_long": [
+                        {
+                            "ind": "rsi",
+                            "params": {"period": 14},
+                            "op": "lt",
+                            "value": 35,
+                        }
+                    ],
+                    "entry_short": [
+                        {
+                            "ind": "rsi",
+                            "params": {"period": 14},
+                            "op": "gt",
+                            "value": 65,
+                        }
+                    ],
+                    "filters": [
+                        {
+                            "ind": "vol_ratio",
+                            "params": {"period": 20},
+                            "op": "gte",
+                            "value": 1.0,
+                        }
+                    ],
+                    "exit": {
+                        "atr_period": 14,
+                        "atr_stop": 1.5,
+                        "reward_r": 2.0,
+                        "leverage": 2,
+                    },
+                    "mtf_filter": False,
+                }
+            ]
+        },
+        "requirements": [
+            "only catalog indicators and allowed params",
+            "each spec needs entry_long and/or entry_short",
+            "prefer interpretable classic setups (trend, pullback, breakout, mean-revert)",
+            "never propose empty entries or no-trade philosophies",
+        ],
+    }
+    obj = _llm_chat(
+        "You design indicator-based futures specs for paper research. "
+        "Goal is positive PnL expectancy; accept risk within leverage bounds. "
+        "Never advise perpetual flat.",
+        json.dumps(prompt, default=str),
+        temperature=0.75,
+    )
+    if not isinstance(obj, dict):
+        return []
+    out: list[dict] = []
+    for item in (obj.get("specs") or obj.get("proposals") or [])[:count]:
+        if not isinstance(item, dict):
+            continue
+        s = normalize_spec(item)
+        ok, msg = validate_spec(s)
+        if ok:
+            out.append(s)
+        else:
+            logger.info("LLM spec rejected: %s", msg)
+    logger.info("LLM propose_specs validated=%d", len(out))
+    return out
+
+
+def propose_spec_patch(
+    current_spec: dict,
+    *,
+    paper_stats: dict | None = None,
+    tick_history_text: str | None = None,
+) -> list[dict]:
+    """Propose at most small patches (tune/add/remove one indicator condition)."""
+    if not config.LLM_RESEARCH_ENABLED:
+        return []
+    from modules.indicator_catalog import catalog_for_prompt
+
+    prompt = {
+        "task": (
+            "MISSION: improve paper PnL/expectancy. "
+            "Given current Strategy Spec and paper stats, propose up to 3 patches. "
+            "Each patch changes ONE condition: action=tune|add|remove on "
+            "target=entry_long|entry_short|filters. "
+            "Do NOT suggest stopping trading. JSON only."
+        ),
+        "current_spec": current_spec,
+        "paper_stats": paper_stats or {},
+        "tick_history": (tick_history_text or "")[:1200],
+        "catalog": catalog_for_prompt(),
+        "output_schema": {
+            "patches": [
+                {
+                    "action": "tune",
+                    "target": "filters",
+                    "index": 0,
+                    "params": {"period": 14},
+                    "value": 1.0,
+                    "reason": "loosen volume to get more samples with edge",
+                }
+            ]
+        },
+    }
+    obj = _llm_chat(
+        "You patch indicator specs for better expectancy. Never recommend flat forever.",
+        json.dumps(prompt, default=str),
+        temperature=0.5,
+    )
+    if not isinstance(obj, dict):
+        return []
+    patches = [p for p in (obj.get("patches") or [])[:5] if isinstance(p, dict)]
+    logger.info("LLM propose_spec_patch n=%d", len(patches))
+    return patches
+
+
 def review_research_report(report_lite: dict) -> dict[str, Any]:
     """AI Review of research metrics — does NOT promote."""
     if not config.LLM_RESEARCH_ENABLED:

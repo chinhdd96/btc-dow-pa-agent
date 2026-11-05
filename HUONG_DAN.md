@@ -1,11 +1,13 @@
 # Hướng dẫn — Champion Research Agent (live data, paper fill)
 
-Agent tự nghiên cứu chiến lược → validate → chọn Champion → paper trên nến Binance live.
-**Không đặt lệnh live.** LLM chỉ propose / review / post-mortem — không quyết định BUY/SELL mỗi giờ.
+Agent nghiên cứu **Strategy Spec** (ghép chỉ báo catalog) → validate → chọn Champion → paper trên nến Binance live.
+**Không đặt lệnh live.** LLM propose/patch Spec + review/post-mortem — **không** quyết định BUY/SELL mỗi nến.
+
+**Nhiệm vụ duy nhất: PnL / expectancy sau phí dương** — chấp nhận rủi ro trong bound leverage; không lấy “đứng ngoài mãi” làm chiến lược.
 
 ```
-LLM đề xuất → Evolution + backtest + validation → Champion
-  → Paper (Python) → Post-mortem / decay → Research lại
+LLM ghép/sửa chỉ báo (Spec) → Evolution + backtest → Promote Spec
+  → Paper (Python) → đủ N lệnh patch/replace hoặc starve/decay → Research lại
 ```
 
 **Timeframe:** entry trên nến **15m** đã đóng (`TIMEFRAME_MAIN=15m`). Bias HTF: **1h / 4h / 1d**. Signal nến T → fill open nến T+1 (~15 phút sau); không trade nến đang forming.
@@ -69,18 +71,16 @@ python scripts/run_research.py --no-llm --days 180 --generations 2 --population 
 | Bước | Ai | Việc |
 |------|-----|------|
 | Data | Python | Klines + funding + OI + MTF (public futures) |
-| Analysis | Python | Features (EMA/RSI/ATR/VWAP/…) |
-| Propose | LLM | Genome JSON trong schema |
-| Evolution | Python | Mutate / crossover / evaluate train·val·test |
-| AI Review | LLM | Giải thích report — **không** promote |
-| Promote | Python | Hard `qualified` ưu tiên; nếu không có → soft-promote (`PAPER_SOFT_PROMOTE`) |
-| Paper | Python | Signal nến đóng theo **đúng** genome → fill open sau; SL/TP/LIQ/funding |
-| Tick history | Python | SKIP/PENDING + reason → nếu chronic starve → `research_due` sớm |
-| Research adapt | Python + LLM | Starve seeds (genome lỏng hơn) + LLM propose theo top_reasons → promote genome mới |
-| Post-mortem | LLM + Python | Lesson + challenger hints + decay → early research |
+| Catalog features | Python | Tính chỉ báo **đúng param** Spec yêu cầu |
+| Propose / patch | LLM | Strategy Spec từ catalog; sau ≥12 lệnh: tune/add/remove 1 chỉ báo; ≥20: replace |
+| Evolution | Python | Seed 11 family→Spec + LLM specs + mutate / evaluate |
+| AI Review | LLM | Giải thích — **không** promote |
+| Promote | Python | Hard/soft Spec; starve → nới Spec / đổi Spec (vẫn soft-promote để học) |
+| Paper | Python | Signal theo Champion Spec → fill nến sau; SL/TP/LIQ |
+| Tick history | Python | SKIP reason → starve → research sớm |
 
-`PAPER_SOFT_ENTRY` mặc định **OFF** — không hardcode nới filter live; cải tiến = đổi Champion genome.
-Không Champion (hard lẫn soft) → **đứng flat** (không LLM entry thay thế).
+`SPEC_PATCH_MIN_TRADES=12`, `SPEC_REPLACE_MIN_TRADES=20`, cooldown 6h, tối đa ~1 research/24h ceiling.
+Flat tạm chỉ khi chưa có Spec compile được — research vẫn chạy (PnL-first).
 
 ---
 
