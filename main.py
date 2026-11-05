@@ -70,16 +70,30 @@ def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
         champ_spec = report.get("champion_spec") or {}
         review = report.get("ai_review") or {}
         ev = report.get("champion_evaluation") or {}
+        research_mode = (report.get("config") or {}).get("research_mode") or "—"
+        promote_mode = report.get("promote_mode") or "—"
+        sid = ev.get("spec_id") or report.get("champion_spec_id") or "—"
         msg = (
             "RESEARCH Spec xong (PAPER only | PnL-first)\n"
-            f"Spec={champ_spec.get('name') or 'NONE'} "
-            f"id={ev.get('spec_id') or report.get('champion_spec_id') or '—'}\n"
-            f"mode={report.get('config', {}).get('research_mode') or '—'} "
-            f"promote={report.get('promote_mode')}\n"
+            f"Spec={champ_spec.get('name') or 'NONE'} id={sid}\n"
+            f"mode={research_mode} promote={promote_mode}\n"
             f"Qualified top={sum(1 for c in report.get('top_candidates') or [] if c.get('qualified'))}\n"
             f"AI review: {(review.get('summary') or '')[:400]}"
         )
         notifier.send(msg)
+        # Dedicated note whenever a Spec/family (indicator set) is chosen
+        if champ_spec:
+            from modules.strategy_spec import format_spec_telegram
+
+            notifier.send(
+                format_spec_telegram(
+                    champ_spec,
+                    sid=str(sid) if sid != "—" else None,
+                    promote_mode=str(promote_mode),
+                    research_mode=str(research_mode),
+                    source="LLM+evolution" if config.LLM_RESEARCH_ENABLED else "evolution",
+                )
+            )
         rt = _load_runtime()
         rt["last_research_ts"] = time.time()
         _save_runtime(rt)

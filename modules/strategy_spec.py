@@ -24,6 +24,65 @@ def spec_id(spec: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
+def _fmt_cond(cond: dict[str, Any]) -> str:
+    ind = str(cond.get("ind") or "?")
+    params = cond.get("params") or {}
+    op = str(cond.get("op") or "")
+    param_s = ",".join(f"{k}={v}" for k, v in sorted(params.items())) if params else ""
+    head = f"{ind}({param_s})" if param_s else ind
+    vs = cond.get("vs")
+    if isinstance(vs, dict) and vs.get("ind"):
+        vp = vs.get("params") or {}
+        vp_s = ",".join(f"{k}={v}" for k, v in sorted(vp.items())) if vp else ""
+        right = f"{vs['ind']}({vp_s})" if vp_s else str(vs["ind"])
+        return f"{head} {op} {right}"
+    val = cond.get("value")
+    if val is None:
+        return f"{head} {op}".strip()
+    return f"{head} {op} {val}"
+
+
+def format_spec_telegram(
+    spec: dict[str, Any] | None,
+    *,
+    sid: str | None = None,
+    promote_mode: str | None = None,
+    research_mode: str | None = None,
+    source: str = "research",
+) -> str:
+    """Human-readable Telegram note for a chosen indicator family/Spec."""
+    if not spec:
+        return "SPEC: (none)"
+    s = normalize_spec(spec)
+    sid = sid or spec_id(s)
+    lines = [
+        "FAMILY/SPEC ĐÃ CHỌN (chỉ báo)",
+        f"name={s.get('name') or '—'} id={sid}",
+        f"source={source} mode={research_mode or '—'} promote={promote_mode or '—'}",
+        f"mtf={bool(s.get('mtf_filter'))}",
+    ]
+    long_c = s.get("entry_long") or []
+    short_c = s.get("entry_short") or []
+    filters = s.get("filters") or []
+    if long_c:
+        lines.append("LONG: " + " AND ".join(_fmt_cond(c) for c in long_c if isinstance(c, dict)))
+    else:
+        lines.append("LONG: (none)")
+    if short_c:
+        lines.append("SHORT: " + " AND ".join(_fmt_cond(c) for c in short_c if isinstance(c, dict)))
+    else:
+        lines.append("SHORT: (none)")
+    if filters:
+        lines.append("FILTER: " + " AND ".join(_fmt_cond(c) for c in filters if isinstance(c, dict)))
+    else:
+        lines.append("FILTER: (none)")
+    ex = s.get("exit") or {}
+    lines.append(
+        f"EXIT: atr×{ex.get('atr_stop')} RR={ex.get('reward_r')} lev={ex.get('leverage')}x"
+    )
+    return "\n".join(lines)
+
+
 def normalize_spec(spec: dict[str, Any]) -> dict[str, Any]:
     out = deepcopy(spec)
     out.setdefault("name", "unnamed")
