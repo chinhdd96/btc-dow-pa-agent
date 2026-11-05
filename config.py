@@ -211,8 +211,8 @@ PAPER_SOFT_PROMOTE = os.getenv("PAPER_SOFT_PROMOTE", "true").strip().lower() in 
 SOFT_MIN_VALIDATION_TRADES = int(os.getenv("SOFT_MIN_VALIDATION_TRADES", "6"))
 SOFT_MIN_TEST_TRADES = int(os.getenv("SOFT_MIN_TEST_TRADES", "4"))
 SOFT_MIN_PROFIT_FACTOR = float(os.getenv("SOFT_MIN_PROFIT_FACTOR", "1.0"))
-# Soft-entry live: nới volume/max ATR trên paper (không đổi genome_id đã promote)
-PAPER_SOFT_ENTRY = os.getenv("PAPER_SOFT_ENTRY", "true").strip().lower() in {
+# Soft-entry live: OFF mặc định — học qua tick_history → research đổi genome
+PAPER_SOFT_ENTRY = os.getenv("PAPER_SOFT_ENTRY", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -222,6 +222,13 @@ PAPER_SOFT_VOLUME_CAP = float(os.getenv("PAPER_SOFT_VOLUME_CAP", "1.1"))
 PAPER_SOFT_MAX_ATR_FLOOR = float(os.getenv("PAPER_SOFT_MAX_ATR_FLOOR", "0.04"))
 TICK_HISTORY_MAX = int(os.getenv("TICK_HISTORY_MAX", "80"))
 TICK_HISTORY_PROMPT_MAX_CHARS = int(os.getenv("TICK_HISTORY_PROMPT_MAX_CHARS", "1800"))
+# Chronic SKIP → early research (genome mới), không nới filter live
+STARVE_MIN_TICKS = int(os.getenv("STARVE_MIN_TICKS", "16"))
+STARVE_SKIP_RATIO = float(os.getenv("STARVE_SKIP_RATIO", "0.85"))
+STARVE_TRIGGER_RESEARCH = os.getenv(
+    "STARVE_TRIGGER_RESEARCH", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+STARVE_COOLDOWN_HOURS = float(os.getenv("STARVE_COOLDOWN_HOURS", "6"))
 PAPER_POLL_SECONDS = int(os.getenv("PAPER_POLL_SECONDS", "20"))
 RESEARCH_EVERY_HOURS = float(os.getenv("RESEARCH_EVERY_HOURS", "24"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))

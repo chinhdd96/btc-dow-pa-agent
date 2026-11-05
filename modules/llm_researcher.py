@@ -78,6 +78,7 @@ def propose_genomes(
     *,
     research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
+    starvation: dict | None = None,
 ) -> list[Genome]:
     if not config.LLM_RESEARCH_ENABLED:
         logger.info("LLM researcher disabled via LLM_RESEARCH_ENABLED")
@@ -101,15 +102,25 @@ def propose_genomes(
         "mtf_filter": [True, False],
     }
     ctx = _load_research_context()
+    starve = starvation or {}
     prompt = {
         "task": (
             "Propose diverse, testable BTCUSDT perpetual futures strategy hypotheses. "
             "Do not claim profitability. Return JSON only. "
-            "Use recent tick_history only as research context (why Champion stayed flat / fired); "
-            "do NOT invent per-candle BUY/SELL instructions."
+            "tick_history / starvation diagnose WHY the current Champion stayed flat "
+            "(volume_filter, max_atr, mtf, setup). Respond by proposing NEW genomes with "
+            "looser or different parameters — do NOT suggest live filter overrides, "
+            "and do NOT invent per-candle BUY/SELL instructions."
         ),
         "market_summary": market_summary,
         "research_focus": research_focus or [],
+        "starvation": {
+            "starving": bool(starve.get("starving")),
+            "skip_ratio": starve.get("skip_ratio"),
+            "top_reasons": starve.get("top_reasons"),
+            "focus": starve.get("focus"),
+            "summary": starve.get("summary"),
+        },
         "market_notes": ctx["combined"],
         "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
         "allowed_values": allowed,
@@ -119,7 +130,8 @@ def propose_genomes(
             "prefer interpretable hypotheses",
             "do not optimize only for recent noise",
             "use only allowed_values",
-            "if tick_history shows chronic SKIP from filters, prefer looser volume/ATR/mtf variants",
+            "if starving / chronic SKIP: majority of proposals must address top_reasons "
+            "(lower volume_filter, higher max_atr_pct, mtf_filter=false, or other families)",
         ],
         "output_schema": {
             "proposals": [

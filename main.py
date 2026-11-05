@@ -215,6 +215,19 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
         else:
             closed_all.extend(trader.process(bars))
 
+        # Chronic filter SKIP → flag early research (genome change), not live soft-entry
+        st2 = champion_store.get_paper_state()
+        diag = tick_history.maybe_flag_research_due(st2)
+        if diag and st2.get("research_due"):
+            champion_store.set_paper_state(st2)
+            if diag.get("should_reresearch"):
+                notifier.send(
+                    "Champion STARVING (chronic SKIP)\n"
+                    f"{diag.get('summary')}\n"
+                    + "\n".join((diag.get("focus") or [])[:3])
+                    + "\n→ research sớm (đổi genome, không nới filter live)"
+                )
+
         if not trader.state.get("champion"):
             logger.info("Flat: no Champion qualified yet")
     except Exception as exc:  # noqa: BLE001

@@ -51,8 +51,21 @@ def run_research(*, use_llm: bool | None = None) -> dict:
     }
     state = champion_store.get_paper_state()
     focus = list(state.get("next_research_focus") or [])
+    starve = tick_history.starvation_report()
+    focus = list(dict.fromkeys([*focus, *(state.get("starve_focus") or []), *starve.get("focus") or []]))
 
     tick_ctx = tick_history.format_for_prompt()
+    starve_seeds = tick_history.challenger_genomes_from_starvation(
+        state.get("champion"),
+        report=starve,
+    )
+    if starve_seeds:
+        logger.info(
+            "Starvation seeds=%d | %s",
+            len(starve_seeds),
+            starve.get("summary"),
+        )
+
     proposals: list[Genome] = []
     if use_llm:
         proposals = propose_genomes(
@@ -60,14 +73,23 @@ def run_research(*, use_llm: bool | None = None) -> dict:
             count=max(8, config.POPULATION_SIZE // 3),
             research_focus=focus,
             tick_history_text=tick_ctx,
+            starvation=starve,
         )
 
-    evolution = StrategyEvolution(llm_proposals=proposals)
+    evolution = StrategyEvolution(
+        llm_proposals=proposals,
+        seed_genomes=starve_seeds,
+    )
     ranked = evolution.research(data)
 
     trader = PaperChampion()
     current = trader.state.get("champion")
-    selected = maybe_promote(ranked, current)
+    selected = maybe_promote(
+        ranked,
+        current,
+        starving=bool(starve.get("starving")),
+        paper_trade_count=int(state.get("trade_count") or 0),
+    )
 
     baseline_exp = None
     if selected:
@@ -82,6 +104,7 @@ def run_research(*, use_llm: bool | None = None) -> dict:
         st = champion_store.get_paper_state()
         st["challenger_hints"] = []
         st["research_due"] = False
+        st["starve_focus"] = []
         champion_store.set_paper_state(st)
 
     soft_used = bool(
@@ -104,6 +127,8 @@ def run_research(*, use_llm: bool | None = None) -> dict:
             else ("hard" if selected else "none")
         ),
         "tick_history": tick_ctx,
+        "starvation": starve,
+        "research_focus": focus,
         "top_candidates": [
             {
                 "genome_id": r["genome_id"],

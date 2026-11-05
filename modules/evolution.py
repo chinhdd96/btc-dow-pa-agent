@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 def maybe_promote(
     ranked: list[dict],
     current: Optional[dict],
+    *,
+    starving: bool = False,
+    paper_trade_count: int = 0,
 ) -> Optional[Genome]:
     hard = [r for r in ranked if r["qualified"]]
     soft = [
@@ -36,6 +39,19 @@ def maybe_promote(
     mode = "hard" if best["qualified"] else "soft"
     if current:
         old_id = Genome(**current).genome_id
+        # Prefer a different genome when live Champion is starving with 0 paper trades
+        if (
+            starving
+            and paper_trade_count <= 0
+            and best["genome_id"] != old_id
+        ):
+            logger.info(
+                "Starve-replace champion %s → %s (%s)",
+                old_id,
+                best["genome_id"],
+                mode,
+            )
+            return Genome(**best["genome"])
         old = next(
             (
                 r
@@ -47,6 +63,8 @@ def maybe_promote(
         )
         # Soft challenger must beat current by more to avoid thrash
         margin = 3 if best["qualified"] else 8
+        if starving and paper_trade_count <= 0:
+            margin = 1 if best["qualified"] else 3
         if old and best["robust_score"] < old["robust_score"] + margin:
             return Genome(**current)
     logger.info(

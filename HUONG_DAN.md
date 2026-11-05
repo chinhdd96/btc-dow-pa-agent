@@ -74,10 +74,12 @@ python scripts/run_research.py --no-llm --days 180 --generations 2 --population 
 | Evolution | Python | Mutate / crossover / evaluate train·val·test |
 | AI Review | LLM | Giải thích report — **không** promote |
 | Promote | Python | Hard `qualified` ưu tiên; nếu không có → soft-promote (`PAPER_SOFT_PROMOTE`) |
-| Paper | Python | Signal nến đóng → fill open sau; SL/TP/LIQ/funding; soft-entry nới vol/ATR live |
-| Tick history | Python | Mỗi nến 15m ghi SKIP/PENDING/… → research/post-mortem (không AI entry) |
+| Paper | Python | Signal nến đóng theo **đúng** genome → fill open sau; SL/TP/LIQ/funding |
+| Tick history | Python | SKIP/PENDING + reason → nếu chronic starve → `research_due` sớm |
+| Research adapt | Python + LLM | Starve seeds (genome lỏng hơn) + LLM propose theo top_reasons → promote genome mới |
 | Post-mortem | LLM + Python | Lesson + challenger hints + decay → early research |
 
+`PAPER_SOFT_ENTRY` mặc định **OFF** — không hardcode nới filter live; cải tiến = đổi Champion genome.
 Không Champion (hard lẫn soft) → **đứng flat** (không LLM entry thay thế).
 
 ---
