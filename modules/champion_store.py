@@ -98,6 +98,19 @@ def list_paper_trades(limit: int = 50, path: str | None = None) -> list[dict]:
     return out
 
 
+def replace_paper_trades(trades: list[dict], path: str | None = None) -> None:
+    """Replace paper_trades table (used by champion snapshot restore)."""
+    db = path or _db_path()
+    init_db(db)
+    with sqlite3.connect(db) as con:
+        con.execute("DELETE FROM paper_trades")
+        for trade in trades:
+            con.execute(
+                "INSERT INTO paper_trades(payload) VALUES(?)",
+                (json.dumps(trade, default=str),),
+            )
+
+
 def get_paper_state(path: str | None = None) -> dict:
     return db_get(
         "paper_state",

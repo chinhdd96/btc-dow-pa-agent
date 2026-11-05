@@ -18,6 +18,7 @@ from typing import Any
 import schedule
 
 import config
+from modules import champion_backup
 from modules import champion_store
 from modules import strategy_decay
 from modules.archive_state import archive_learn_state
@@ -83,6 +84,10 @@ def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
         st = champion_store.get_paper_state()
         st["research_due"] = False
         champion_store.set_paper_state(st)
+        try:
+            champion_backup.backup_remote(force=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("champion backup after research failed: %s", exc)
         logger.info("=== Research job done ===")
         return report
     except Exception as exc:  # noqa: BLE001
@@ -136,6 +141,10 @@ def _handle_closed_trade(
         f"{(lesson or '')[:300]}\n"
         f"Decay={decay.get('decay')} {decay.get('reason') or ''}"
     )
+    try:
+        champion_backup.backup_remote(force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("champion backup after close failed: %s", exc)
 
 
 def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
@@ -220,6 +229,10 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
         diag = tick_history.maybe_flag_research_due(st2)
         if diag and st2.get("research_due"):
             champion_store.set_paper_state(st2)
+            try:
+                champion_backup.backup_remote(force=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("champion backup after starve failed: %s", exc)
             if diag.get("should_reresearch"):
                 notifier.send(
                     "Champion STARVING (chronic SKIP)\n"
@@ -289,6 +302,13 @@ def main() -> None:
         logger.warning("archive_learn_state skipped: %s", exc)
 
     champion_store.init_db()
+    try:
+        restored = champion_backup.ensure_restored()
+        if restored:
+            logger.info("Restored Champion snapshot from GitHub")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("champion restore skipped: %s", exc)
+
     memory = MemoryManager()
     notifier = Notifier()
 
@@ -320,6 +340,9 @@ def main() -> None:
     schedule.every(24).hours.do(job_learn, notifier)
     schedule.every(24).hours.do(job_news, notifier)
     schedule.every().hour.do(job_compact, memory, notifier)
+    schedule.every(1).hours.do(
+        lambda: champion_backup.backup_remote(force=True)
+    )
 
     logger.info(
         "Entering loop: paper tick every %ss; research every %sh or on decay",

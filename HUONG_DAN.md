@@ -91,6 +91,7 @@ Không Champion (hard lẫn soft) → **đứng flat** (không LLM entry thay th
 | `generated/research/btc_agent.sqlite3` | Champion state, paper trades, research runs |
 | `generated/research/last_report.json` | Report research mới nhất |
 | `generated/tick_history.jsonl` | Tick 15m gần nhất (research context) |
+| GitHub `history-data` → `champion_snapshot.json` | Backup Champion + trades + tick (Blitz rebuild) |
 | `generated/daily_playbook.md` | Learner → context researcher |
 | `generated/context.json` | News → context researcher |
 | `generated/archive/` | State học cũ (migrate một lần) |

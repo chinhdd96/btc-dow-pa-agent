@@ -72,6 +72,10 @@ MEMORY_GITHUB_PATH = os.getenv("MEMORY_GITHUB_PATH", "generated/memory.json").st
 ADAPTIVE_RULES_GITHUB_PATH = os.getenv(
     "ADAPTIVE_RULES_GITHUB_PATH", "generated/adaptive_rules.json"
 ).strip()
+# Champion paper_state + trades + tick_history (JSON snapshot on history-data)
+CHAMPION_GITHUB_PATH = os.getenv(
+    "CHAMPION_GITHUB_PATH", "generated/champion_snapshot.json"
+).strip()
 
 # Self-improve / opportunity-first learning loop
 # Default: KHÔNG chặn cứng setup (đứng ngoài mãi = không học được).
