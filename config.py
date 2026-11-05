@@ -201,6 +201,27 @@ TRAIN_FRACTION = float(os.getenv("TRAIN_FRACTION", "0.55"))
 VALIDATION_FRACTION = float(os.getenv("VALIDATION_FRACTION", "0.20"))
 MIN_VALIDATION_TRADES = int(os.getenv("MIN_VALIDATION_TRADES", "12"))
 MIN_TEST_TRADES = int(os.getenv("MIN_TEST_TRADES", "8"))
+# Soft-promote: khi không ai hard-qualify, vẫn promote top soft để paper học được
+PAPER_SOFT_PROMOTE = os.getenv("PAPER_SOFT_PROMOTE", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+SOFT_MIN_VALIDATION_TRADES = int(os.getenv("SOFT_MIN_VALIDATION_TRADES", "6"))
+SOFT_MIN_TEST_TRADES = int(os.getenv("SOFT_MIN_TEST_TRADES", "4"))
+SOFT_MIN_PROFIT_FACTOR = float(os.getenv("SOFT_MIN_PROFIT_FACTOR", "1.0"))
+# Soft-entry live: nới volume/max ATR trên paper (không đổi genome_id đã promote)
+PAPER_SOFT_ENTRY = os.getenv("PAPER_SOFT_ENTRY", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+PAPER_SOFT_VOLUME_CAP = float(os.getenv("PAPER_SOFT_VOLUME_CAP", "1.1"))
+PAPER_SOFT_MAX_ATR_FLOOR = float(os.getenv("PAPER_SOFT_MAX_ATR_FLOOR", "0.04"))
+TICK_HISTORY_MAX = int(os.getenv("TICK_HISTORY_MAX", "80"))
+TICK_HISTORY_PROMPT_MAX_CHARS = int(os.getenv("TICK_HISTORY_PROMPT_MAX_CHARS", "1800"))
 PAPER_POLL_SECONDS = int(os.getenv("PAPER_POLL_SECONDS", "20"))
 RESEARCH_EVERY_HOURS = float(os.getenv("RESEARCH_EVERY_HOURS", "24"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))
@@ -296,4 +317,5 @@ PATHS = {
     "REPLAY_DONE": str(BASE_DIR / "generated" / "replay" / "done.json"),
     "RESEARCH_DB": RESEARCH_DB_PATH,
     "RESEARCH_REPORT": RESEARCH_REPORT_PATH,
+    "TICK_HISTORY": str(BASE_DIR / "generated" / "tick_history.jsonl"),
 }

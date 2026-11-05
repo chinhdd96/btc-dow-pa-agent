@@ -33,6 +33,7 @@ from modules.quant_data import (
     fetch_klines,
 )
 from modules.research_pipeline import run_research
+from modules import tick_history
 
 logging.basicConfig(
     level=logging.INFO,
@@ -164,6 +165,11 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
             )
 
         def on_tick(report: dict) -> None:
+            # Research context (not AI entry). Keep even OPEN/CLOSE for flat-vs-active debug.
+            try:
+                tick_history.append(report)
+            except Exception as exc:
+                logger.warning("tick_history append failed: %s", exc)
             # Short per-candle analysis (15m close). OPEN/CLOSE still have dedicated msgs.
             action = str(report.get("action") or "SKIP")
             if action in {"OPEN"} or action.startswith("CLOSE_"):

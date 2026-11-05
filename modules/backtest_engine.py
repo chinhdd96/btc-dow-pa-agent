@@ -180,11 +180,22 @@ def evaluate_genome(df: pd.DataFrame, g: Genome) -> dict:
         and vm["profit_factor"] > 1.05
         and tm["profit_factor"] > 1.05
     )
-    robust = (
-        min(vm["score"], tm["score"])
-        if qualified
-        else min(vm["score"], tm["score"]) - 50
+    # Soft: đủ mẫu nhẹ hơn, PF >= floor, ít nhất 1 split expectancy > 0
+    soft_qualified = (
+        not qualified
+        and vm["trade_count"] >= config.SOFT_MIN_VALIDATION_TRADES
+        and tm["trade_count"] >= config.SOFT_MIN_TEST_TRADES
+        and (vm["expectancy"] > 0 or tm["expectancy"] > 0)
+        and vm["profit_factor"] >= config.SOFT_MIN_PROFIT_FACTOR
+        and tm["profit_factor"] >= config.SOFT_MIN_PROFIT_FACTOR
     )
+    base = min(vm["score"], tm["score"])
+    if qualified:
+        robust = base
+    elif soft_qualified:
+        robust = base - 25
+    else:
+        robust = base - 50
     return {
         "genome": asdict(g),
         "genome_id": g.genome_id,
@@ -192,5 +203,6 @@ def evaluate_genome(df: pd.DataFrame, g: Genome) -> dict:
         "validation": vm,
         "test": tm,
         "qualified": qualified,
+        "soft_qualified": soft_qualified,
         "robust_score": robust,
     }

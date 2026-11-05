@@ -258,44 +258,72 @@ def mtf_side_allowed(row: pd.Series, side: Optional[int], enabled: bool) -> bool
     return all(biases) if side == 1 else all(not b for b in biases)
 
 
+def soft_entry_genome(g: Genome) -> tuple[Genome, list[str]]:
+    """Cap volume / floor max ATR for paper live only — genome_id unchanged in storage."""
+    notes: list[str] = []
+    if not config.PAPER_SOFT_ENTRY:
+        return g, notes
+    d = asdict(g)
+    changed = False
+    if d.get("volume_filter", 0) > config.PAPER_SOFT_VOLUME_CAP:
+        notes.append(f"volf {d['volume_filter']}→{config.PAPER_SOFT_VOLUME_CAP}")
+        d["volume_filter"] = config.PAPER_SOFT_VOLUME_CAP
+        changed = True
+    if float(d.get("max_atr_pct") or 0) < config.PAPER_SOFT_MAX_ATR_FLOOR:
+        notes.append(
+            f"maxatr {float(d['max_atr_pct'])*100:.1f}%→{config.PAPER_SOFT_MAX_ATR_FLOOR*100:.1f}%"
+        )
+        d["max_atr_pct"] = config.PAPER_SOFT_MAX_ATR_FLOOR
+        changed = True
+    if not changed:
+        return g, notes
+    return Genome(**d), notes
+
+
 def diagnose_entry(
     row: pd.Series,
     prev: pd.Series,
     g: Genome,
 ) -> dict:
     """Short entry decision + reason for Telegram tick notify."""
+    live_g, soft_notes = soft_entry_genome(g)
     needed = ["atr", "rsi", "ema_fast", "ema_slow", "ema_long", "atr_pct"]
     if any(pd.isna(row.get(k)) for k in needed):
         return {"side": None, "action": "SKIP", "why": "thiếu indicator (warm-up)"}
     if row.atr <= 0:
         return {"side": None, "action": "SKIP", "why": "ATR không hợp lệ"}
-    if row.atr_pct > g.max_atr_pct:
+    if row.atr_pct > live_g.max_atr_pct:
         return {
             "side": None,
             "action": "SKIP",
-            "why": f"ATR% {row.atr_pct*100:.2f}% > max {g.max_atr_pct*100:.1f}%",
+            "why": f"ATR% {row.atr_pct*100:.2f}% > max {live_g.max_atr_pct*100:.1f}%",
         }
-    if g.volume_filter and (pd.isna(row.vol_ratio) or row.vol_ratio < g.volume_filter):
+    if live_g.volume_filter and (
+        pd.isna(row.vol_ratio) or row.vol_ratio < live_g.volume_filter
+    ):
         return {
             "side": None,
             "action": "SKIP",
-            "why": f"vol_ratio {float(row.vol_ratio) if pd.notna(row.vol_ratio) else 0:.2f} < {g.volume_filter}",
+            "why": (
+                f"vol_ratio {float(row.vol_ratio) if pd.notna(row.vol_ratio) else 0:.2f}"
+                f" < {live_g.volume_filter}"
+            ),
         }
-    if g.volatility_mode == "high" and row.atr_pct < 0.015:
+    if live_g.volatility_mode == "high" and row.atr_pct < 0.015:
         return {"side": None, "action": "SKIP", "why": "vol mode=high nhưng ATR% thấp"}
-    if g.volatility_mode == "low" and row.atr_pct > 0.015:
+    if live_g.volatility_mode == "low" and row.atr_pct > 0.015:
         return {"side": None, "action": "SKIP", "why": "vol mode=low nhưng ATR% cao"}
 
-    side = make_signal(row, prev, g)
+    side = make_signal(row, prev, live_g)
     if side is None:
         return {
             "side": None,
             "action": "SKIP",
-            "why": f"family={g.family}: chưa đủ điều kiện setup",
+            "why": f"family={live_g.family}: chưa đủ điều kiện setup",
         }
-    if not mtf_side_allowed(row, side, g.mtf_filter):
+    if not mtf_side_allowed(row, side, live_g.mtf_filter):
         direction = "LONG" if side == 1 else "SHORT"
-        if g.mtf_filter:
+        if live_g.mtf_filter:
             bits = []
             for label, col in (("1h", "htf1_bull"), ("4h", "htf4_bull"), ("1d", "htf1d_bull")):
                 v = row.get(col, np.nan)
@@ -308,10 +336,13 @@ def diagnose_entry(
                 "why": f"signal {direction} bị chặn MTF ({htf})",
             }
         return {"side": None, "action": "SKIP", "why": "signal bị loại"}
+    soft_tag = f" [soft:{','.join(soft_notes)}]" if soft_notes else ""
     return {
         "side": side,
         "action": "PENDING",
-        "why": f"signal {'LONG' if side == 1 else 'SHORT'} → chờ fill nến sau",
+        "why": (
+            f"signal {'LONG' if side == 1 else 'SHORT'} → chờ fill nến sau{soft_tag}"
+        ),
     }
 
 

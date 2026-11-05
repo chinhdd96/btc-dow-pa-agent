@@ -77,6 +77,7 @@ def propose_genomes(
     count: int = 12,
     *,
     research_focus: list[str] | None = None,
+    tick_history_text: str | None = None,
 ) -> list[Genome]:
     if not config.LLM_RESEARCH_ENABLED:
         logger.info("LLM researcher disabled via LLM_RESEARCH_ENABLED")
@@ -103,11 +104,14 @@ def propose_genomes(
     prompt = {
         "task": (
             "Propose diverse, testable BTCUSDT perpetual futures strategy hypotheses. "
-            "Do not claim profitability. Return JSON only."
+            "Do not claim profitability. Return JSON only. "
+            "Use recent tick_history only as research context (why Champion stayed flat / fired); "
+            "do NOT invent per-candle BUY/SELL instructions."
         ),
         "market_summary": market_summary,
         "research_focus": research_focus or [],
         "market_notes": ctx["combined"],
+        "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
         "allowed_values": allowed,
         "requirements": [
             "diverse families and parameter combinations",
@@ -115,6 +119,7 @@ def propose_genomes(
             "prefer interpretable hypotheses",
             "do not optimize only for recent noise",
             "use only allowed_values",
+            "if tick_history shows chronic SKIP from filters, prefer looser volume/ATR/mtf variants",
         ],
         "output_schema": {
             "proposals": [
@@ -170,7 +175,8 @@ def review_research_report(report_lite: dict) -> dict[str, Any]:
         "task": (
             "Review these BTCUSDT strategy research results. "
             "Explain failures, overfitting risks, and suggest next research focus. "
-            "Do NOT claim a strategy is ready for live trading. JSON only."
+            "Use tick_history (if present) only to explain paper flatness / filter blocks — "
+            "not to pick live entries. Do NOT claim ready for live trading. JSON only."
         ),
         "report": report_lite,
         "output_schema": {
@@ -220,16 +226,20 @@ def post_mortem_paper_trade(
         default["lesson"] = f"Paper close {trade.get('exit_reason')} pnl={pnl:+.4f}"
         return default
 
+    from modules import tick_history
+
     prompt = {
         "task": (
             "Post-mortem a PAPER BTCUSDT trade from a Champion genome. "
             "Classify outcome, write a short lesson, say if strategy may be decaying, "
             "and optionally propose challenger genome parameter hints "
-            "(must use allowed genome fields only). JSON only."
+            "(must use allowed genome fields only). "
+            "tick_history is research context only — not entry authority. JSON only."
         ),
         "trade": trade,
         "genome": genome,
         "market": recent_bars_summary or {},
+        "tick_history": tick_history.format_for_prompt(),
         "allowed_families": list(FAMILIES),
         "output_schema": {
             "classification": "GOOD_EDGE|VALID_LOSS|BAD_SETUP|PROCESS_ERROR|INSUFFICIENT_EVIDENCE",

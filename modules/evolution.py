@@ -20,21 +20,42 @@ def maybe_promote(
     ranked: list[dict],
     current: Optional[dict],
 ) -> Optional[Genome]:
-    qualified = [r for r in ranked if r["qualified"]]
-    if not qualified:
+    hard = [r for r in ranked if r["qualified"]]
+    soft = [
+        r
+        for r in ranked
+        if r.get("soft_qualified") and not r["qualified"]
+    ]
+    pool = hard or (soft if config.PAPER_SOFT_PROMOTE else [])
+    if not pool:
         logger.warning(
-            "No candidate passed independent validation. Keep current Champion or stay flat."
+            "No candidate passed validation (hard/soft). Keep current Champion or stay flat."
         )
         return Genome(**current) if current else None
-    best = qualified[0]
+    best = pool[0]
+    mode = "hard" if best["qualified"] else "soft"
     if current:
         old_id = Genome(**current).genome_id
         old = next(
-            (r for r in ranked if r["genome_id"] == old_id and r["qualified"]),
+            (
+                r
+                for r in ranked
+                if r["genome_id"] == old_id
+                and (r["qualified"] or r.get("soft_qualified"))
+            ),
             None,
         )
-        if old and best["robust_score"] < old["robust_score"] + 3:
+        # Soft challenger must beat current by more to avoid thrash
+        margin = 3 if best["qualified"] else 8
+        if old and best["robust_score"] < old["robust_score"] + margin:
             return Genome(**current)
+    logger.info(
+        "Promote %s champion=%s robust=%.2f soft=%s",
+        mode,
+        best["genome_id"],
+        best["robust_score"],
+        bool(best.get("soft_qualified")),
+    )
     return Genome(**best["genome"])
 
 

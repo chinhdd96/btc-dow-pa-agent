@@ -15,6 +15,7 @@ from modules.genome import Genome
 from modules.llm_researcher import propose_genomes, review_research_report
 from modules.paper_champion import PaperChampion
 from modules.quant_data import fetch_market_snapshot, load_research_frame
+from modules import tick_history
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,14 @@ def run_research(*, use_llm: bool | None = None) -> dict:
     state = champion_store.get_paper_state()
     focus = list(state.get("next_research_focus") or [])
 
+    tick_ctx = tick_history.format_for_prompt()
     proposals: list[Genome] = []
     if use_llm:
         proposals = propose_genomes(
             market_summary,
             count=max(8, config.POPULATION_SIZE // 3),
             research_focus=focus,
+            tick_history_text=tick_ctx,
         )
 
     evolution = StrategyEvolution(llm_proposals=proposals)
@@ -81,13 +84,31 @@ def run_research(*, use_llm: bool | None = None) -> dict:
         st["research_due"] = False
         champion_store.set_paper_state(st)
 
+    soft_used = bool(
+        selected
+        and next(
+            (
+                r
+                for r in ranked
+                if r["genome_id"] == selected.genome_id and r.get("soft_qualified")
+            ),
+            None,
+        )
+    )
     report_lite = {
         "bars": len(data),
         "champion": asdict(selected) if selected else None,
+        "promote_mode": (
+            "soft"
+            if soft_used
+            else ("hard" if selected else "none")
+        ),
+        "tick_history": tick_ctx,
         "top_candidates": [
             {
                 "genome_id": r["genome_id"],
                 "qualified": r["qualified"],
+                "soft_qualified": bool(r.get("soft_qualified")),
                 "robust_score": r["robust_score"],
                 "family": r["genome"].get("family"),
                 "validation": r["validation"],
@@ -134,9 +155,10 @@ def run_research(*, use_llm: bool | None = None) -> dict:
         "top_candidates": ranked[:20],
         "ai_review": ai_review,
         "qualification_note": (
-            "No candidate is promoted without positive validation and test expectancy, "
-            "PF > 1.05, minimum trade counts."
+            "Hard: val+test expectancy>0, PF>1.05, min trades. "
+            "Soft (PAPER_SOFT_PROMOTE): lower trade mins, PF>=floor, either-split expectancy>0."
         ),
+        "promote_mode": report_lite["promote_mode"],
         "execution_mode": "PAPER_ONLY; live trading is hard-disabled",
     }
     with open(config.RESEARCH_REPORT_PATH, "w", encoding="utf-8") as f:

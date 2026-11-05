@@ -73,11 +73,12 @@ python scripts/run_research.py --no-llm --days 180 --generations 2 --population 
 | Propose | LLM | Genome JSON trong schema |
 | Evolution | Python | Mutate / crossover / evaluate train·val·test |
 | AI Review | LLM | Giải thích report — **không** promote |
-| Promote | Python | `maybe_promote` chỉ candidate `qualified` |
-| Paper | Python | Signal nến đóng → fill open sau; SL/TP/LIQ/funding |
+| Promote | Python | Hard `qualified` ưu tiên; nếu không có → soft-promote (`PAPER_SOFT_PROMOTE`) |
+| Paper | Python | Signal nến đóng → fill open sau; SL/TP/LIQ/funding; soft-entry nới vol/ATR live |
+| Tick history | Python | Mỗi nến 15m ghi SKIP/PENDING/… → research/post-mortem (không AI entry) |
 | Post-mortem | LLM + Python | Lesson + challenger hints + decay → early research |
 
-Không Champion qualified → **đứng flat** (không LLM entry thay thế).
+Không Champion (hard lẫn soft) → **đứng flat** (không LLM entry thay thế).
 
 ---
 
@@ -87,6 +88,7 @@ Không Champion qualified → **đứng flat** (không LLM entry thay thế).
 |------|----------|
 | `generated/research/btc_agent.sqlite3` | Champion state, paper trades, research runs |
 | `generated/research/last_report.json` | Report research mới nhất |
+| `generated/tick_history.jsonl` | Tick 15m gần nhất (research context) |
 | `generated/daily_playbook.md` | Learner → context researcher |
 | `generated/context.json` | News → context researcher |
 | `generated/archive/` | State học cũ (migrate một lần) |
