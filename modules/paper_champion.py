@@ -13,6 +13,7 @@ from modules import champion_store
 from modules.features_catalog import ensure_features_for_spec
 from modules.quant_data import estimate_depth_fill
 from modules.strategy_spec import (
+    base_name,
     diagnose_spec_entry,
     exit_params,
     genome_dict_to_spec,
@@ -83,9 +84,14 @@ class PaperChampion:
         baseline_expectancy: float | None = None,
     ) -> None:
         s = normalize_spec(spec)
+        s["name"] = base_name(s.get("name"))
+        new_id = spec_id(s)
+        old = self.state.get("champion_spec")
+        old_id = spec_id(old) if old else None
         self.state["champion_spec"] = s
-        self.state["champion_spec_id"] = spec_id(s)
-        self.state["trades_on_spec"] = 0
+        self.state["champion_spec_id"] = new_id
+        if new_id != old_id:
+            self.state["trades_on_spec"] = 0
         self.state["research_mode"] = None
         self.state["timeframe"] = config.TIMEFRAME_MAIN
         # Keep a slim legacy mirror for old readers
@@ -238,8 +244,15 @@ class PaperChampion:
                     logger.warning("on_open callback failed: %s", exc)
 
         pos = self.state.get("position")
-        if pos:
-            fr = last.get("funding_event_rate", np.nan)
+        check_bars = [last]
+        prev_candle = self.state.get("last_candle")
+        if pos and not opened_this and prev_candle:
+            times = x["open_time"].astype(str)
+            hit = times.index[times == str(prev_candle)]
+            if len(hit):
+                check_bars = [x.iloc[j] for j in range(int(hit[0]) + 1, len(x))] or [last]
+        for bar in check_bars if pos else []:
+            fr = bar.get("funding_event_rate", np.nan)
             if pd.notna(fr):
                 funding_cashflow = (
                     -pos["side"] * float(fr) * pos["entry"] * pos["qty"]
@@ -247,15 +260,15 @@ class PaperChampion:
                 self.state["equity"] += funding_cashflow
                 pos["funding_pnl"] = pos.get("funding_pnl", 0.0) + funding_cashflow
             liq_hit = (
-                last.low <= pos.get("liq", -np.inf)
+                bar.low <= pos.get("liq", -np.inf)
                 if pos["side"] == 1
-                else last.high >= pos.get("liq", np.inf)
+                else bar.high >= pos.get("liq", np.inf)
             )
             stop_hit = (
-                last.low <= pos["sl"] if pos["side"] == 1 else last.high >= pos["sl"]
+                bar.low <= pos["sl"] if pos["side"] == 1 else bar.high >= pos["sl"]
             )
             tp_hit = (
-                last.high >= pos["tp"] if pos["side"] == 1 else last.low <= pos["tp"]
+                bar.high >= pos["tp"] if pos["side"] == 1 else bar.low <= pos["tp"]
             )
             reason = (
                 "LIQUIDATION_ESTIMATE"
@@ -286,7 +299,7 @@ class PaperChampion:
                     "exit": fill,
                     "exit_reason": reason,
                     "pnl": pnl,
-                    "exit_time": candle_id,
+                    "exit_time": str(bar.open_time),
                     "exit_fee": exit_fee,
                     "equity_after": self.state["equity"],
                 }
@@ -307,6 +320,7 @@ class PaperChampion:
                         self.on_close(trade)
                     except Exception as exc:
                         logger.warning("on_close callback failed: %s", exc)
+                break
 
         decision: dict[str, Any] = {"side": None, "action": "HOLD", "why": ""}
         if self.state.get("position") is not None:

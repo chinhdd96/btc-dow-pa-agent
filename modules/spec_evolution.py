@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from copy import deepcopy
 from typing import Any
 
@@ -12,13 +13,16 @@ import pandas as pd
 import config
 from modules.backtest_engine import evaluate_spec
 from modules.champion_store import get_paper_state
+from modules.features import add_features as add_base_features
 from modules.strategy_spec import (
     apply_patch,
+    base_name,
     default_seed_specs,
     loosen_spec_for_starve,
     normalize_spec,
     spec_id,
     validate_spec,
+    variant_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,7 +103,7 @@ def _mutate_spec(spec: dict, rng: random.Random) -> dict:
                 except (TypeError, ValueError):
                     pass
             break
-    s["name"] = str(s.get("name") or "spec") + "_m"
+    s["name"] = variant_name(s.get("name"), "m")
     ok, _ = validate_spec(s)
     return s if ok else normalize_spec(spec)
 
@@ -149,41 +153,58 @@ class SpecEvolution:
             except Exception:
                 continue
 
+        pop_size = max(8, config.POPULATION_SIZE // 2)
         specs = list(uniq.values())
-        # Fill with mutations toward POPULATION_SIZE
-        while len(specs) < max(8, config.POPULATION_SIZE // 2) and specs:
-            parent = self.rng.choice(specs)
-            child = _mutate_spec(parent, self.rng)
+        attempts = 0
+        while len(uniq) < pop_size and specs and attempts < pop_size * 5:
+            attempts += 1
+            child = _mutate_spec(self.rng.choice(specs), self.rng)
             uniq[spec_id(child)] = child
-            specs = list(uniq.values())
+        specs = list(uniq.values())
 
+        base = add_base_features(df)
         all_results: dict[str, dict] = {}
-        for gen in range(max(1, min(config.GENERATIONS, 8))):
-            batch = specs
+        n_gens = max(1, min(config.GENERATIONS, config.SPEC_MAX_GENERATIONS))
+        deadline = time.monotonic() + config.RESEARCH_MAX_MINUTES * 60
+        for gen in range(n_gens):
             results = []
-            for s in batch:
+            for s in specs:
                 sid = spec_id(s)
                 if sid not in all_results:
-                    all_results[sid] = evaluate_spec(df, s)
+                    all_results[sid] = evaluate_spec(df, s, base=base)
                 results.append(all_results[sid])
             results.sort(key=lambda z: z["robust_score"], reverse=True)
             logger.info(
-                "Spec gen %d/%d best=%.2f qualified=%s",
+                "Spec gen %d/%d pop=%d evaluated=%d best=%.2f qualified=%s",
                 gen + 1,
-                max(1, min(config.GENERATIONS, 8)),
+                n_gens,
+                len(specs),
+                len(all_results),
                 results[0]["robust_score"] if results else -999,
                 sum(1 for r in results if r["qualified"]),
             )
-            elite_n = max(2, int(len(batch) * config.ELITE_FRACTION))
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "Spec research time budget %sm reached at gen %d",
+                    config.RESEARCH_MAX_MINUTES,
+                    gen + 1,
+                )
+                break
+            elite_n = max(2, int(pop_size * config.ELITE_FRACTION))
             elites = [normalize_spec(r["spec"]) for r in results[:elite_n]]
-            new_specs = elites[:]
-            while len(new_specs) < max(len(batch), 8):
+            seen_family = {base_name(e.get("name")) for e in elites}
+            for r in results[elite_n:]:
+                fam = base_name(r["spec"].get("name"))
+                if fam not in seen_family and len(elites) < pop_size // 2:
+                    seen_family.add(fam)
+                    elites.append(normalize_spec(r["spec"]))
+            nxt: dict[str, dict] = {spec_id(e): e for e in elites}
+            attempts = 0
+            while len(nxt) < pop_size and attempts < pop_size * 5:
+                attempts += 1
                 child = _mutate_spec(self.rng.choice(elites), self.rng)
-                new_specs.append(child)
-            # merge
-            for s in new_specs:
-                uniq[spec_id(s)] = s
-            specs = list(uniq.values())
+                nxt.setdefault(spec_id(child), child)
+            specs = list(nxt.values())
 
         ranked = sorted(
             all_results.values(), key=lambda z: z["robust_score"], reverse=True

@@ -182,9 +182,17 @@ def collect_requirements(conditions: Iterable[dict[str, Any]]) -> list[tuple[str
     return req
 
 
-def ensure_features_for_spec(df: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
-    """Base features + all Spec-referenced catalog columns."""
-    x = add_base_features(df)
+def ensure_features_for_spec(
+    df: pd.DataFrame,
+    spec: dict[str, Any],
+    *,
+    base: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Base features + all Spec-referenced catalog columns.
+
+    ``base`` is a precomputed ``add_base_features(df)``; it is copied, never mutated.
+    """
+    x = base.copy() if base is not None else add_base_features(df)
     conds: list[dict] = []
     for key in ("entry_long", "entry_short", "filters"):
         block = spec.get(key) or []

@@ -406,13 +406,18 @@ def backtest_signal(
     }
 
 
-def evaluate_spec(df: pd.DataFrame, spec: dict[str, Any]) -> dict:
+def evaluate_spec(
+    df: pd.DataFrame,
+    spec: dict[str, Any],
+    *,
+    base: pd.DataFrame | None = None,
+) -> dict:
     from modules.features_catalog import ensure_features_for_spec
     from modules.strategy_spec import compile_signal, exit_params, normalize_spec, spec_id
 
     s = normalize_spec(spec)
     sid = spec_id(s)
-    framed = ensure_features_for_spec(df, s)
+    framed = ensure_features_for_spec(df, s, base=base)
     fn = compile_signal(s)
     ex = exit_params(s)
     n = len(framed)

@@ -100,6 +100,7 @@ def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
         # Clear decay flag after research
         st = champion_store.get_paper_state()
         st["research_due"] = False
+        st["last_spec_research_ts"] = time.time()
         champion_store.set_paper_state(st)
         try:
             champion_backup.backup_remote(force=True)
@@ -184,8 +185,11 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
     try:
         rt = _load_runtime()
         st = champion_store.get_paper_state()
-        due = bool(st.get("research_due"))
-        last_ts = float(rt.get("last_research_ts") or 0)
+        due = bool(st.get("research_due")) or not st.get("champion_spec")
+        last_ts = max(
+            float(rt.get("last_research_ts") or 0),
+            float(st.get("last_spec_research_ts") or 0),
+        )
         if due or (time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600):
             job_research(notifier, memory)
 
@@ -365,10 +369,9 @@ def main() -> None:
     )
     notifier.send(start_msg)
 
-    # Immediate context + research + first paper tick
+    # Research on startup only if no Spec / research_due / stale (job_paper_tick decides)
     job_learn(notifier)
     job_news(notifier)
-    job_research(notifier, memory)
     job_paper_tick(notifier, memory)
 
     schedule.every(24).hours.do(job_learn, notifier)

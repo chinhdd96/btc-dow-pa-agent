@@ -19,9 +19,28 @@ logger = logging.getLogger(__name__)
 SignalFn = Callable[[pd.Series, pd.Series], Optional[int]]
 
 
+_VARIANT_TOKENS = {"m", "loose", "patch", "ptun", "padd", "prem"}
+_ID_EXCLUDE_KEYS = {"name", "legacy_family", "variant"}
+
+
 def spec_id(spec: dict[str, Any]) -> str:
-    raw = json.dumps(normalize_spec(spec), sort_keys=True, default=str)
+    """Hash of trading logic only — renaming a Spec does not change its id."""
+    logic = {
+        k: v for k, v in normalize_spec(spec).items() if k not in _ID_EXCLUDE_KEYS
+    }
+    raw = json.dumps(logic, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
+def base_name(name: str | None) -> str:
+    tokens = str(name or "spec").split("_")
+    while len(tokens) > 1 and tokens[-1] in _VARIANT_TOKENS:
+        tokens.pop()
+    return "_".join(tokens) or "spec"
+
+
+def variant_name(name: str | None, variant: str) -> str:
+    return f"{base_name(name)}_{variant}"
 
 
 def _fmt_cond(cond: dict[str, Any]) -> str:
@@ -625,7 +644,7 @@ def loosen_spec_for_starve(spec: dict[str, Any]) -> dict[str, Any]:
         new_filters.append(c)
     s["filters"] = new_filters
     s["mtf_filter"] = False
-    s["name"] = str(s.get("name") or "spec") + "_loose"
+    s["name"] = variant_name(s.get("name"), "loose")
     return s
 
 
@@ -677,5 +696,5 @@ def apply_patch(spec: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any] |
     if not ok:
         logger.info("patch rejected: %s", msg)
         return None
-    s["name"] = str(s.get("name") or "spec") + f"_p{action[:3]}"
+    s["name"] = variant_name(s.get("name"), "patch")
     return s
