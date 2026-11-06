@@ -23,7 +23,6 @@ from modules.strategy_spec import (
     compile_signal,
     diagnose_spec_entry,
     exit_params,
-    genome_dict_to_spec,
     normalize_spec,
     spec_id,
     spec_requirements,
@@ -84,14 +83,6 @@ class PaperChampion:
         if "equity" not in self.state:
             self.state["equity"] = config.INITIAL_CAPITAL
         changed = False
-        if not self.state.get("champion_spec") and self.state.get("champion"):
-            try:
-                self.state["champion_spec"] = genome_dict_to_spec(self.state["champion"])
-                self.state["champion_spec_id"] = spec_id(self.state["champion_spec"])
-                self.state["trades_on_spec"] = 0
-                changed = True
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("genome→spec migrate failed: %s", exc)
         spec = self.state.get("champion_spec")
         if spec and spec.get("name") != base_name(spec.get("name")):
             spec["name"] = base_name(spec.get("name"))
@@ -103,7 +94,7 @@ class PaperChampion:
                     self.state.get("timeframe"),
                     config.TIMEFRAME_MAIN,
                 )
-            for key in ("champion", "champion_spec", "champion_spec_id", "pending", "position"):
+            for key in ("champion", "champion_spec", "champion_spec_id", "pending", "position", "family"):
                 self.state[key] = None
             self.state["trades_on_spec"] = 0
             self.state["timeframe"] = config.TIMEFRAME_MAIN
@@ -157,6 +148,7 @@ class PaperChampion:
         baseline_expectancy: float | None = None,
     ) -> None:
         s = normalize_spec(spec)
+        s.pop("variant", None)
         s["name"] = base_name(s.get("name"))
         new_id = spec_id(s)
         old = self.state.get("champion_spec")
@@ -169,7 +161,7 @@ class PaperChampion:
         self.state["research_mode"] = None
         self.state["timeframe"] = config.TIMEFRAME_MAIN
         self.state["champion"] = {
-            "family": s.get("legacy_family") or s.get("name") or "spec",
+            "family": s.get("name") or "spec",
             "atr_stop": float(s["exit"]["atr_stop"]),
             "reward_r": float(s["exit"]["reward_r"]),
             "leverage": int(s["exit"]["leverage"]),
@@ -182,14 +174,14 @@ class PaperChampion:
 
     def _spec(self) -> Optional[dict]:
         spec = self.state.get("champion_spec")
-        if not spec and self.state.get("champion"):
-            try:
-                spec = genome_dict_to_spec(self.state["champion"])
-                self.state["champion_spec"] = spec
-                self.state["champion_spec_id"] = spec_id(spec)
-            except Exception:  # noqa: BLE001
-                spec = None
         return normalize_spec(spec) if spec else None
+
+    def _label(self, spec: dict) -> str:
+        if self.shadow:
+            return str(self.state.get("name") or spec.get("name") or "shadow")
+        from modules.family import label
+
+        return label(self.state) or spec.get("name") or "spec"
 
     # --- position mechanics ------------------------------------------------------
 
@@ -211,7 +203,7 @@ class PaperChampion:
             extra={
                 "genome_id": sid,
                 "spec_id": sid,
-                "family": spec.get("name") or spec.get("legacy_family") or "spec",
+                "family": self._label(spec),
                 "exit_cfg": ex,
                 "entry_context": pending.get("entry_context"),
                 "signal_time": pending.get("signal_time"),
@@ -428,7 +420,7 @@ class PaperChampion:
             "atr_pct": float(last.atr_pct) if pd.notna(last.get("atr_pct")) else None,
             "rsi": float(last.rsi) if "rsi" in last.index and pd.notna(last.get("rsi")) else None,
             "regime": regime_of(last).get("tag"),
-            "family": s.get("name") or s.get("legacy_family"),
+            "family": self._label(s),
             "genome_id": sid,
             "spec_id": sid,
             "equity": float(self.state.get("equity") or 0),
@@ -485,7 +477,7 @@ class PaperChampion:
             "trades_on_spec": int(self.state.get("trades_on_spec") or 0),
             "has_position": self.state.get("position") is not None,
             "has_pending": self.state.get("pending") is not None,
-            "champion_family": spec.get("name") or spec.get("legacy_family"),
+            "champion_family": self._label(spec) if spec else None,
             "champion_id": sid,
             "research_due": bool(self.state.get("research_due")),
         }

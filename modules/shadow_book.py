@@ -22,13 +22,23 @@ def _now() -> pd.Timestamp:
     return pd.Timestamp.now(tz="UTC")
 
 
-def new_shadow(spec: dict, eval_row: Optional[dict] = None) -> dict[str, Any]:
+def new_shadow(
+    spec: dict,
+    eval_row: Optional[dict] = None,
+    *,
+    label: str | None = None,
+    champion: dict | None = None,
+) -> dict[str, Any]:
+    from modules.family import diff_specs
+
     s = normalize_spec(spec)
     s["name"] = base_name(s.get("name"))
+    sid = spec_id(s)
     return {
         "champion_spec": s,
-        "champion_spec_id": spec_id(s),
-        "name": s["name"],
+        "champion_spec_id": sid,
+        "name": label or f"ứng viên {sid[:6]}",
+        "changes": diff_specs(champion, s)[:4] if champion else [],
         "equity": config.INITIAL_CAPITAL,
         "position": None,
         "pending": None,
@@ -101,9 +111,10 @@ def retire(state: dict) -> list[str]:
     return gone
 
 
-def refill(state: dict, ranked: list[dict], champion_id: str | None) -> list[str]:
+def refill(state: dict, ranked: list[dict], champion: dict | None) -> list[str]:
+    """Fill free slots with the best qualified family variants not already running."""
+    champion_id = spec_id(champion) if champion else None
     existing = {sh.get("champion_spec_id") for sh in shadows(state)}
-    names_in_use = {sh.get("name") for sh in shadows(state)}
     added = []
     for r in ranked:
         if len(shadows(state)) >= config.SHADOW_SLOTS:
@@ -113,25 +124,42 @@ def refill(state: dict, ranked: list[dict], champion_id: str | None) -> list[str
         sid = r["spec_id"]
         if sid == champion_id or sid in existing:
             continue
-        # Prefer diversity: one shadow per base family
-        fam = base_name(r.get("name"))
-        if fam in names_in_use:
-            continue
-        sh = new_shadow(r["spec"], r)
+        sh = new_shadow(r["spec"], r, champion=champion)
         state["shadows"].append(sh)
         existing.add(sid)
-        names_in_use.add(fam)
-        added.append(sh["name"])
+        added.append(f"{sh['name']}: {'; '.join(sh['changes'][:2])}")
     return added
 
 
-def add_spec(state: dict, spec: dict, eval_row: Optional[dict] = None) -> bool:
+def add_spec(
+    state: dict,
+    spec: dict,
+    eval_row: Optional[dict] = None,
+    *,
+    label: str | None = None,
+    champion: dict | None = None,
+) -> bool:
     sid = spec_id(spec)
     if any(sh.get("champion_spec_id") == sid for sh in shadows(state)):
         return False
     if len(shadows(state)) >= config.SHADOW_SLOTS:
         return False
-    state["shadows"].append(new_shadow(spec, eval_row))
+    state["shadows"].append(new_shadow(spec, eval_row, label=label, champion=champion))
+    return True
+
+
+def ensure(state: dict, row: dict, *, champion: dict | None = None) -> bool:
+    """Make room for a candidate that must prove itself forward (evicts the weakest flat shadow)."""
+    sid = row["spec_id"]
+    if any(sh.get("champion_spec_id") == sid for sh in shadows(state)):
+        return False
+    if len(shadows(state)) >= config.SHADOW_SLOTS:
+        flat = [sh for sh in shadows(state) if sh.get("position") is None and not sh.get("pending")]
+        if not flat:
+            return False
+        weakest = min(flat, key=lambda sh: stats(sh.get("trades") or [])["expectancy"] or 0.0)
+        remove(state, weakest["champion_spec_id"])
+    state["shadows"].append(new_shadow(row["spec"], row, champion=champion))
     return True
 
 
@@ -167,4 +195,6 @@ def summary_lines(state: dict) -> list[str]:
             f"- {sh.get('name')} [{sh.get('champion_spec_id')}] n={st['n']} "
             f"pnl={st['pnl']:+.2f} exp={st['expectancy']} win={st['win_rate']}% {pos}"
         )
+        if sh.get("changes"):
+            out.append("    " + "; ".join(sh["changes"][:2]))
     return out

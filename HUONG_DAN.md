@@ -72,15 +72,18 @@ python scripts/run_research.py --no-llm --days 180 --generations 2 --population 
 |------|-----|------|
 | Data | Python | Klines + funding + OI + MTF (public futures) |
 | Catalog features | Python | Tính chỉ báo **đúng param** Spec yêu cầu |
-| Propose / patch | LLM | Strategy Spec từ catalog; sau ≥12 lệnh: tune/add/remove 1 chỉ báo; ≥20: replace |
-| Evolution | Python | Seed 11 family→Spec + LLM specs + mutate / evaluate |
+| Genesis | LLM | Thiết kế **1 family duy nhất** (3–5 loại chỉ báo): 6 bản nháp → walk-forward chọn v1 |
+| Cải tiến | LLM | Mỗi lần research: 4 biến thể add/remove/replace/tune chỉ báo hoặc exit (patch 1–2 thao tác; rework tối đa 4, được thay lõi) |
+| Evolution | Python | Chỉ tinh chỉnh số (ngưỡng, SL/TP, đòn bẩy) của các biến thể — không đổi bộ chỉ báo |
 | AI Review | LLM | Giải thích — **không** promote |
-| Promote | Python | Hard/soft Spec; starve → nới Spec / đổi Spec (vẫn soft-promote để học) |
+| Promote | Python | Lên version mới khi thắng OOS; version đang khỏe chỉ bị thay khi thắng ≥8 điểm, nếu không ứng viên phải thắng forward ở shadow |
 | Paper | Python | Signal theo Champion Spec → fill nến sau; SL/TP/LIQ |
 | Tick history | Python | SKIP reason → starve → research sớm |
 
-`SPEC_PATCH_MIN_TRADES=12`, `SPEC_REPLACE_MIN_TRADES=20`, cooldown 6h, tối đa ~1 research/24h ceiling.
-Flat tạm chỉ khi chưa có Spec compile được — research vẫn chạy (PnL-first).
+`SPEC_PATCH_MIN_TRADES=12` → patch; decay, ≥20 lệnh mà lỗ, hoặc 3 lần research liên tiếp version yếu → rework. Cooldown 6h, tối đa ~1 research/24h ceiling.
+Đếm chỉ báo theo loại: EMA12 + EMA50 = 1 (ema), Donchian high/low = 1, giá close không tính, `mtf_filter` tính 1.
+Nhật ký version (đổi gì, vì sao, kết quả backtest + paper) được gửi lại cho LLM ở lần sau.
+Genesis cần LLM; nếu LLM lỗi thì giữ Champion cũ (hoặc flat nếu chưa có) và thử lại sau 30 phút.
 
 ### Vòng lặp chính (mỗi 20s)
 
@@ -93,7 +96,7 @@ Flat tạm chỉ khi chưa có Spec compile được — research vẫn chạy (
 
 - LLM nhận: lịch sử research (Spec tốt/tệ, chỉ báo nào hay đạt chuẩn, kết quả paper thật), bài học sau lệnh, 20 lệnh gần nhất kèm giá trị chỉ báo + regime lúc vào lệnh.
 - Đánh giá walk-forward 4 đoạn sau train; đạt chuẩn khi ≥3/4 đoạn có lời, PF > 1.05; phạt Spec quá nhiều điều kiện.
-- Shadow: tối đa 3 Spec ứng viên chạy paper ảo; shadow có ≥8 lệnh lời hơn Champion cùng khoảng thời gian được ưu tiên khi research.
+- Shadow: tối đa 3 version ứng viên (hoặc version cũ để quay lại) chạy paper ảo; shadow có ≥8 lệnh lời hơn Champion cùng khoảng thời gian được lên version mới.
 - Exit tùy chọn trong Spec: `breakeven_r`, `trail_atr`, `max_bars`, `exit_on_opposite` — cùng một hàm cho backtest, paper và live.
 
 ---

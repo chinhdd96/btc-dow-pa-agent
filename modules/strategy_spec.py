@@ -393,289 +393,6 @@ def diagnose_spec_entry(
     }
 
 
-# --- Legacy family → Spec seeds -------------------------------------------------
-
-def family_to_spec(family: str, **overrides: Any) -> dict[str, Any]:
-    """Map old 11 families into Strategy Spec equivalents."""
-    rsi_low = int(overrides.get("rsi_low", 30))
-    rsi_high = int(overrides.get("rsi_high", 70))
-    fast = int(overrides.get("fast", 12))
-    slow = int(overrides.get("slow", 50))
-    breakout_n = int(overrides.get("breakout_n", 20))
-    vol_f = float(overrides.get("volume_filter", 0) or 0)
-    max_atr = float(overrides.get("max_atr_pct", 0.06) or 0.06)
-    atr_stop = float(overrides.get("atr_stop", 2.0))
-    reward_r = float(overrides.get("reward_r", 2.0))
-    leverage = int(overrides.get("leverage", 2))
-    mtf = bool(overrides.get("mtf_filter", False))
-    funding_abs = float(overrides.get("funding_abs_max", 0.001))
-    oi_min = float(overrides.get("oi_change_min", 0.0))
-
-    filters: list[dict] = [
-        {"ind": "atr_pct", "params": {"period": 14}, "op": "lte", "value": max_atr},
-    ]
-    if vol_f > 0:
-        filters.append(
-            {"ind": "vol_ratio", "params": {"period": 20}, "op": "gte", "value": vol_f}
-        )
-
-    exit_cfg = {
-        "atr_period": 14,
-        "atr_stop": atr_stop,
-        "reward_r": reward_r,
-        "leverage": leverage,
-    }
-
-    def base(name: str, entry_long: list, entry_short: list) -> dict:
-        return normalize_spec(
-            {
-                "name": name,
-                "entry_long": entry_long,
-                "entry_short": entry_short,
-                "filters": filters,
-                "exit": exit_cfg,
-                "mtf_filter": mtf,
-                "legacy_family": family,
-            }
-        )
-
-    if family == "trend_cross":
-        return base(
-            "trend_cross",
-            [
-                {
-                    "ind": "ema",
-                    "params": {"period": fast},
-                    "op": "cross_up",
-                    "vs": {"ind": "ema", "params": {"period": slow}},
-                }
-            ],
-            [
-                {
-                    "ind": "ema",
-                    "params": {"period": fast},
-                    "op": "cross_down",
-                    "vs": {"ind": "ema", "params": {"period": slow}},
-                }
-            ],
-        )
-    if family == "breakout":
-        return base(
-            "breakout",
-            [
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "gt",
-                    "vs": {"ind": "donchian_high", "params": {"period": breakout_n}},
-                }
-            ],
-            [
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "lt",
-                    "vs": {"ind": "donchian_low", "params": {"period": breakout_n}},
-                }
-            ],
-        )
-    if family == "pullback":
-        return base(
-            "pullback",
-            [
-                {"ind": "dist_to_ema", "params": {"period": 200}, "op": "gt", "value": 0},
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "cross_up",
-                    "vs": {"ind": "ema", "params": {"period": fast}},
-                },
-                {
-                    "ind": "rsi",
-                    "params": {"period": 14},
-                    "op": "between",
-                    "value": [rsi_low, rsi_high],
-                },
-            ],
-            [
-                {"ind": "dist_to_ema", "params": {"period": 200}, "op": "lt", "value": 0},
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "cross_down",
-                    "vs": {"ind": "ema", "params": {"period": fast}},
-                },
-                {
-                    "ind": "rsi",
-                    "params": {"period": 14},
-                    "op": "between",
-                    "value": [100 - rsi_high, 100 - rsi_low],
-                },
-            ],
-        )
-    if family == "mean_revert":
-        return base(
-            "mean_revert",
-            [
-                {"ind": "bb_z", "params": {"period": 20, "std": 2.0}, "op": "lte", "value": -1.8},
-                {"ind": "rsi", "params": {"period": 14}, "op": "lt", "value": rsi_low},
-            ],
-            [
-                {"ind": "bb_z", "params": {"period": 20, "std": 2.0}, "op": "gte", "value": 1.8},
-                {"ind": "rsi", "params": {"period": 14}, "op": "gt", "value": rsi_high},
-            ],
-        )
-    if family == "momentum":
-        return base(
-            "momentum",
-            [
-                {"ind": "ret", "params": {"period": 5}, "op": "gt", "value": 0.012},
-                {"ind": "ret", "params": {"period": 20}, "op": "gt", "value": 0.02},
-            ],
-            [
-                {"ind": "ret", "params": {"period": 5}, "op": "lt", "value": -0.012},
-                {"ind": "ret", "params": {"period": 20}, "op": "lt", "value": -0.02},
-            ],
-        )
-    if family == "volatility_breakout":
-        fl = [
-            {"ind": "atr_pct", "params": {"period": 14}, "op": "gte", "value": 0.012},
-        ] + filters
-        return normalize_spec(
-            {
-                "name": "volatility_breakout",
-                "entry_long": [
-                    {
-                        "ind": "close",
-                        "params": {},
-                        "op": "gt",
-                        "vs": {"ind": "donchian_high", "params": {"period": breakout_n}},
-                    }
-                ],
-                "entry_short": [
-                    {
-                        "ind": "close",
-                        "params": {},
-                        "op": "lt",
-                        "vs": {"ind": "donchian_low", "params": {"period": breakout_n}},
-                    }
-                ],
-                "filters": fl,
-                "exit": exit_cfg,
-                "mtf_filter": mtf,
-                "legacy_family": family,
-            }
-        )
-    if family == "vwap_reversion":
-        return base(
-            "vwap_reversion",
-            [
-                {"ind": "vwap_z", "params": {"window": 48}, "op": "lt", "value": -1.5},
-                {"ind": "rsi", "params": {"period": 14}, "op": "lt", "value": rsi_low},
-            ],
-            [
-                {"ind": "vwap_z", "params": {"window": 48}, "op": "gt", "value": 1.5},
-                {"ind": "rsi", "params": {"period": 14}, "op": "gt", "value": rsi_high},
-            ],
-        )
-    if family == "funding_contrarian":
-        return base(
-            "funding_contrarian",
-            [
-                {"ind": "funding_rate", "params": {}, "op": "lte", "value": -funding_abs},
-                {"ind": "rsi", "params": {"period": 14}, "op": "lt", "value": 45},
-            ],
-            [
-                {"ind": "funding_rate", "params": {}, "op": "gte", "value": funding_abs},
-                {"ind": "rsi", "params": {"period": 14}, "op": "gt", "value": 55},
-            ],
-        )
-    if family == "oi_breakout":
-        return base(
-            "oi_breakout",
-            [
-                {"ind": "oi_change", "params": {}, "op": "gte", "value": oi_min},
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "gt",
-                    "vs": {"ind": "donchian_high", "params": {"period": breakout_n}},
-                },
-            ],
-            [
-                {"ind": "oi_change", "params": {}, "op": "gte", "value": oi_min},
-                {
-                    "ind": "close",
-                    "params": {},
-                    "op": "lt",
-                    "vs": {"ind": "donchian_low", "params": {"period": breakout_n}},
-                },
-            ],
-        )
-    if family == "range_compression":
-        fl = [
-            {"ind": "atr_pct", "params": {"period": 14}, "op": "lt", "value": 0.012},
-        ]
-        if vol_f > 0:
-            fl.append(
-                {"ind": "vol_ratio", "params": {"period": 20}, "op": "gte", "value": vol_f}
-            )
-        return normalize_spec(
-            {
-                "name": "range_compression",
-                "entry_long": [
-                    {
-                        "ind": "close",
-                        "params": {},
-                        "op": "gt",
-                        "vs": {"ind": "donchian_high", "params": {"period": breakout_n}},
-                    }
-                ],
-                "entry_short": [
-                    {
-                        "ind": "close",
-                        "params": {},
-                        "op": "lt",
-                        "vs": {"ind": "donchian_low", "params": {"period": breakout_n}},
-                    }
-                ],
-                "filters": fl,
-                "exit": exit_cfg,
-                "mtf_filter": mtf,
-                "legacy_family": family,
-            }
-        )
-    if family == "orderflow_imbalance":
-        return base(
-            "orderflow_imbalance",
-            [
-                {"ind": "taker_buy_ratio", "params": {}, "op": "gt", "value": 0.58},
-                {"ind": "vol_ratio", "params": {"period": 20}, "op": "gt", "value": 1.1},
-            ],
-            [
-                {"ind": "taker_buy_ratio", "params": {}, "op": "lt", "value": 0.42},
-                {"ind": "vol_ratio", "params": {"period": 20}, "op": "gt", "value": 1.1},
-            ],
-        )
-    # default: RSI mean-ish
-    return base(
-        family or "rsi_default",
-        [{"ind": "rsi", "params": {"period": 14}, "op": "lt", "value": rsi_low}],
-        [{"ind": "rsi", "params": {"period": 14}, "op": "gt", "value": rsi_high}],
-    )
-
-
-def genome_dict_to_spec(g: dict[str, Any]) -> dict[str, Any]:
-    family = str(g.get("family") or "trend_cross")
-    return family_to_spec(family, **g)
-
-
-def default_seed_specs() -> list[dict[str, Any]]:
-    from modules.genome import FAMILIES
-
-    return [family_to_spec(f) for f in FAMILIES]
-
-
 def loosen_spec_for_starve(spec: dict[str, Any]) -> dict[str, Any]:
     """PnL-first: nới filter khi starve để có tín hiệu học."""
     s = normalize_spec(spec)
@@ -696,44 +413,104 @@ def loosen_spec_for_starve(spec: dict[str, Any]) -> dict[str, Any]:
     return s
 
 
+_PRICE_INDS = {"close"}
+_IND_TYPE = {
+    "donchian_high": "donchian",
+    "donchian_low": "donchian",
+    "htf_1h_bull": "htf_trend",
+    "htf_4h_bull": "htf_trend",
+    "ema_cross": "ema",
+}
+_EXIT_KEYS = {"atr_stop", "reward_r", "leverage", "breakeven_r", "trail_atr", "max_bars", "exit_on_opposite"}
+
+
+def indicator_types(spec: dict[str, Any]) -> list[str]:
+    """Distinct indicator types a Spec uses (ema12 + ema50 = ema; raw price not counted)."""
+    s = normalize_spec(spec)
+    names: set[str] = set()
+    for key in ("entry_long", "entry_short", "filters"):
+        for cond in s.get(key) or []:
+            if not isinstance(cond, dict):
+                continue
+            names.add(str(cond.get("ind") or ""))
+            vs = cond.get("vs")
+            if isinstance(vs, dict) and vs.get("ind"):
+                names.add(str(vs["ind"]))
+    if s.get("mtf_filter"):
+        names.add("htf_trend")
+    return sorted({_IND_TYPE.get(n, n) for n in names if n and n not in _PRICE_INDS})
+
+
+def family_shape_ok(spec: dict[str, Any]) -> tuple[bool, str]:
+    ok, msg = validate_spec(spec)
+    if not ok:
+        return False, msg
+    n = len(indicator_types(spec))
+    if not config.FAMILY_MIN_INDICATORS <= n <= config.FAMILY_MAX_INDICATORS:
+        return False, (
+            f"{n} chỉ báo, cần {config.FAMILY_MIN_INDICATORS}-{config.FAMILY_MAX_INDICATORS}"
+        )
+    return True, ""
+
+
+def _index(patch: dict[str, Any], block: list) -> int | None:
+    try:
+        idx = int(patch.get("index"))
+    except (TypeError, ValueError):
+        idx = None
+    if idx is not None and 0 <= idx < len(block):
+        return idx
+    ind = str(patch.get("ind") or "")
+    return next((i for i, c in enumerate(block) if str(c.get("ind")) == ind), None) if ind else None
+
+
 def apply_patch(spec: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any] | None:
-    """Apply one LLM patch: tune|add|remove on entry_long/short/filters."""
+    """One edit: add|remove|replace|tune a condition, or set exit params / mtf."""
     s = normalize_spec(spec)
     action = str(patch.get("action") or "").lower()
-    target = str(patch.get("target") or "filters")  # entry_long|entry_short|filters
+
+    if action == "exit":
+        changes = patch.get("exit") if isinstance(patch.get("exit"), dict) else {}
+        changes = {k: v for k, v in changes.items() if k in _EXIT_KEYS}
+        if not changes:
+            return None
+        s["exit"] = {**s["exit"], **changes}
+        return normalize_spec(s)
+    if action == "mtf":
+        s["mtf_filter"] = bool(patch.get("value"))
+        return s
+
+    target = str(patch.get("target") or "filters")
     if target not in {"entry_long", "entry_short", "filters"}:
         return None
     block = list(s.get(target) or [])
+    idx = _index(patch, block)
 
     if action == "remove":
-        idx = int(patch.get("index", -1))
-        if idx < 0 or idx >= len(block):
-            # remove by ind match
-            ind = str(patch.get("ind") or "")
-            block = [c for c in block if str(c.get("ind")) != ind]
-        else:
-            block.pop(idx)
-    elif action == "add":
+        if idx is None:
+            return None
+        block.pop(idx)
+    elif action in {"add", "replace"}:
         cond = patch.get("condition")
-        if not isinstance(cond, dict):
+        if not isinstance(cond, dict) or not _validate_cond(cond)[0]:
             return None
-        ok, _ = _validate_cond(cond)
-        if not ok:
+        if action == "add":
+            block.append(cond)
+        elif idx is None:
             return None
-        block.append(cond)
+        else:
+            block[idx] = cond
     elif action == "tune":
-        idx = int(patch.get("index", 0))
-        if idx < 0 or idx >= len(block):
+        if idx is None:
             return None
         cond = deepcopy(block[idx])
-        if "params" in patch and isinstance(patch["params"], dict):
+        if isinstance(patch.get("params"), dict):
             cond["params"] = {**(cond.get("params") or {}), **patch["params"]}
         if "value" in patch:
             cond["value"] = patch["value"]
         if "op" in patch:
             cond["op"] = patch["op"]
-        ok, _ = _validate_cond(cond)
-        if not ok:
+        if not _validate_cond(cond)[0]:
             return None
         block[idx] = cond
     else:
@@ -744,5 +521,22 @@ def apply_patch(spec: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any] |
     if not ok:
         logger.info("patch rejected: %s", msg)
         return None
-    s["name"] = variant_name(s.get("name"), "patch")
+    return s
+
+
+def apply_ops(spec: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Apply a sequence of edits; the result must still be a valid 3–5 indicator family."""
+    s = normalize_spec(spec)
+    for op in ops:
+        if not isinstance(op, dict):
+            return None
+        nxt = apply_patch(s, op)
+        if nxt is None:
+            logger.info("family op rejected: %s", json.dumps(op, default=str)[:200])
+            return None
+        s = nxt
+    ok, msg = family_shape_ok(s)
+    if not ok:
+        logger.info("family variant rejected: %s", msg)
+        return None
     return s

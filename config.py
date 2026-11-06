@@ -266,6 +266,16 @@ SPEC_MAX_CONDS_FREE = int(os.getenv("SPEC_MAX_CONDS_FREE", "4"))
 SHADOW_SLOTS = int(os.getenv("SHADOW_SLOTS", "3"))
 SHADOW_MIN_TRADES = int(os.getenv("SHADOW_MIN_TRADES", "8"))
 SHADOW_MAX_DAYS = float(os.getenv("SHADOW_MAX_DAYS", "7"))
+# Single LLM-designed indicator family, improved version by version
+FAMILY_MIN_INDICATORS = int(os.getenv("FAMILY_MIN_INDICATORS", "3"))
+FAMILY_MAX_INDICATORS = int(os.getenv("FAMILY_MAX_INDICATORS", "5"))
+FAMILY_GENESIS_DRAFTS = int(os.getenv("FAMILY_GENESIS_DRAFTS", "6"))
+FAMILY_VARIANTS = int(os.getenv("FAMILY_VARIANTS", "4"))
+# A healthy version is only replaced by backtest if the new one wins by this robust margin;
+# smaller wins must be confirmed forward as a shadow first.
+FAMILY_DIRECT_MARGIN = float(os.getenv("FAMILY_DIRECT_MARGIN", "8"))
+FAMILY_REWORK_AFTER = int(os.getenv("FAMILY_REWORK_AFTER", "3"))
+FAMILY_HISTORY_KEEP = int(os.getenv("FAMILY_HISTORY_KEEP", "30"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))
 LLM_RESEARCH_ENABLED = os.getenv("LLM_RESEARCH_ENABLED", "true").strip().lower() in {
     "1",

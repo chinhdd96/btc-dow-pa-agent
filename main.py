@@ -23,7 +23,7 @@ import pandas as pd
 import schedule
 
 import config
-from modules import champion_backup, champion_store, research_memory, shadow_book
+from modules import champion_backup, champion_store, family, research_memory, shadow_book
 from modules import strategy_decay, tick_history
 from modules.archive_state import archive_learn_state
 from modules.learner_crawler import run_learner_crawler
@@ -133,14 +133,19 @@ def _notify_research(notifier: Notifier, report: dict, minutes: float) -> None:
     review = report.get("ai_review") or {}
     cfg = report.get("config") or {}
     top = report.get("top_candidates") or []
+    fam = report.get("family") or {}
+    decision = report.get("decision") or "—"
     lines = [
-        f"RESEARCH Spec xong ({minutes:.1f} phút, PAPER only | PnL-first)",
-        f"Spec={champ.get('name') or 'NONE'} id={ev.get('spec_id') or '—'}",
-        f"mode={cfg.get('research_mode') or '—'} promote={report.get('promote_mode') or '—'} "
-        f"nguồn={report.get('promote_source') or '—'}",
-        f"Qualified top={sum(1 for c in top if c.get('qualified'))} | "
-        f"folds+={ev.get('positive_folds')}/{cfg.get('wf_folds')}",
+        f"RESEARCH family xong ({minutes:.1f} phút, PAPER only | PnL-first)",
+        f"Family={fam.get('label') or 'NONE'} id={(ev or {}).get('spec_id') or report.get('champion_spec_id') or '—'}",
+        f"mode={cfg.get('research_mode') or '—'} quyết định={decision} "
+        f"nguồn={report.get('promote_source') or '—'} fail_streak={fam.get('fail_streak')}",
+        f"LLM ứng viên={cfg.get('llm_candidates')} | qualified top={sum(1 for c in top if c.get('qualified'))} | "
+        f"folds+={(ev or {}).get('positive_folds')}/{cfg.get('wf_folds')}",
     ]
+    if decision in {"genesis", "promote"} and report.get("changes"):
+        lines.append("THAY ĐỔI:")
+        lines += [f"  {c}" for c in report["changes"][:8]]
     if report.get("shadow_events"):
         lines += report["shadow_events"]
     if report.get("shadows"):
@@ -166,10 +171,10 @@ def research_reason(worker: ResearchWorker) -> str | None:
     if time.time() - worker.last_fail_ts < config.RESEARCH_RETRY_MINUTES * 60:
         return None
     st = champion_store.get_paper_state()
-    if not st.get("champion_spec"):
-        return "no_spec"
+    if family.needs_genesis(st):
+        return "genesis"
     if st.get("research_due"):
-        return f"due:{st.get('research_mode') or 'replace'}"
+        return f"due:{st.get('research_mode') or 'patch'}"
     last_ts = max(
         float(_load_runtime().get("last_research_ts") or 0),
         float(st.get("last_spec_research_ts") or 0),
@@ -218,8 +223,8 @@ def _handle_closed_trade(
     )
     decay = strategy_decay.check_decay(dict(st))
     trades_on = int(st.get("trades_on_spec") or 0)
-    if cooled and (pm.get("decay_signal") or decay.get("decay") or trades_on >= config.SPEC_REPLACE_MIN_TRADES):
-        st["research_due"], st["research_mode"] = True, "replace"
+    if cooled and (pm.get("decay_signal") or decay.get("decay")):
+        st["research_due"], st["research_mode"] = True, "rework"
     elif cooled and trades_on >= config.SPEC_PATCH_MIN_TRADES:
         st["research_due"], st["research_mode"] = True, "patch"
     trader.save()
@@ -423,11 +428,14 @@ def main() -> None:
         f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN} | poll {config.PAPER_POLL_SECONDS}s "
         f"(live SL/TP={'on' if config.LIVE_EXIT_ENABLED else 'off'})\n"
         f"Research nền: mỗi {config.RESEARCH_EVERY_HOURS:.0f}h hoặc khi cần | "
-        f"patch≥{config.SPEC_PATCH_MIN_TRADES} replace≥{config.SPEC_REPLACE_MIN_TRADES} lệnh | "
+        f"patch≥{config.SPEC_PATCH_MIN_TRADES} lệnh | rework sau {config.FAMILY_REWORK_AFTER} lần yếu | "
         f"walk-forward {config.WF_FOLDS} fold\n"
+        f"1 family {config.FAMILY_MIN_INDICATORS}-{config.FAMILY_MAX_INDICATORS} chỉ báo do LLM thiết kế"
+        + (" — chưa có, sẽ tạo (genesis)" if family.needs_genesis(champion_store.get_paper_state()) else "")
+        + "\n"
         f"Equity={s['equity']:.2f}u PnL={s['pnl_total']:+.2f}u "
-        f"trades={s['trade_count']} on_spec={s.get('trades_on_spec', 0)} "
-        f"spec={s['champion_family'] or 'NONE'} id={s['champion_id'] or '—'}"
+        f"trades={s['trade_count']} on_version={s.get('trades_on_spec', 0)} "
+        f"family={s['champion_family'] or 'NONE'} id={s['champion_id'] or '—'}"
         + ("\nSHADOW:\n" + "\n".join(shadows) if shadows else "")
     )
 

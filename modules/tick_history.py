@@ -6,13 +6,11 @@ import json
 import logging
 import re
 from collections import Counter
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import config
-from modules.genome import Genome, genome_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -186,11 +184,11 @@ def starvation_report(n: int | None = None) -> dict[str, Any]:
     if reasons.get("max_atr", 0) >= max(3, n_sample // 5):
         focus.append("Champion bị chặn max_atr_pct — thử max_atr_pct cao hơn (0.04–0.08)")
     if reasons.get("mtf", 0) >= max(3, n_sample // 5):
-        focus.append("Champion bị chặn MTF — thử mtf_filter=false hoặc family khác")
+        focus.append("Champion bị chặn MTF — thử mtf_filter=false hoặc filter xu hướng khác")
     if reasons.get("setup", 0) >= max(3, n_sample // 4):
         focus.append(
-            "Family hiện tại ít setup trên TF live — thử family đa dạng hơn "
-            "(breakout/momentum/trend_cross)"
+            "Family ít setup trên TF live — nới ngưỡng trigger hoặc thay chỉ báo trigger "
+            "bằng loại kích hoạt thường xuyên hơn"
         )
     if reasons.get("no_champion", 0) >= 1:
         focus.append("Chưa có Champion — ưu tiên soft-qualify candidate có trade count đủ")
@@ -215,59 +213,6 @@ def starvation_report(n: int | None = None) -> dict[str, Any]:
         "focus": focus,
         "summary": summary,
     }
-
-
-def challenger_genomes_from_starvation(
-    champion: dict | None,
-    *,
-    report: dict[str, Any] | None = None,
-) -> list[Genome]:
-    """Python-seeded looser variants of current Champion — research tests them, no live override."""
-    if not champion:
-        return []
-    g = genome_from_dict(champion)
-    if not g:
-        try:
-            g = Genome(**{k: champion[k] for k in Genome.__dataclass_fields__ if k in champion})
-        except Exception:
-            return []
-    diag = report or starvation_report()
-    reasons = set(diag.get("reason_counts") or {})
-    out: list[Genome] = []
-
-    def _add(patch: dict) -> None:
-        d = asdict(g)
-        d.update(patch)
-        cand = genome_from_dict(d)
-        if cand and cand.genome_id != g.genome_id:
-            out.append(cand)
-
-    if "volume_filter" in reasons or diag.get("starving"):
-        for vf in (1.2, 1.0, 0.0):
-            if vf < float(g.volume_filter or 0):
-                _add({"volume_filter": vf})
-    if "max_atr" in reasons or diag.get("starving"):
-        for mx in (0.04, 0.06, 0.08):
-            if mx > float(g.max_atr_pct or 0):
-                _add({"max_atr_pct": mx})
-    if "mtf" in reasons and g.mtf_filter:
-        _add({"mtf_filter": False})
-    if "setup" in reasons or diag.get("starving"):
-        for fam in ("breakout", "momentum", "trend_cross", "volatility_breakout"):
-            if fam != g.family:
-                _add({"family": fam, "volume_filter": min(float(g.volume_filter or 0), 1.0)})
-    if "volatility_mode" in reasons and g.volatility_mode != "any":
-        _add({"volatility_mode": "any"})
-
-    # Deduplicate by genome_id
-    seen: set[str] = set()
-    uniq: list[Genome] = []
-    for cand in out:
-        if cand.genome_id in seen:
-            continue
-        seen.add(cand.genome_id)
-        uniq.append(cand)
-    return uniq[:12]
 
 
 def maybe_flag_research_due(state: dict[str, Any]) -> dict[str, Any] | None:

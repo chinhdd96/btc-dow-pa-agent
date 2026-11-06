@@ -10,7 +10,6 @@ from typing import Any
 import requests
 
 import config
-from modules.genome import FAMILIES, Genome, genome_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -72,208 +71,86 @@ def _load_research_context(max_chars: int = 2500) -> dict[str, str]:
     }
 
 
-def propose_genomes(
+def _family_rules() -> list[str]:
+    return [
+        "only catalog indicators and allowed params",
+        f"the family uses {config.FAMILY_MIN_INDICATORS}-{config.FAMILY_MAX_INDICATORS} "
+        "DISTINCT indicator types in total (ema12 and ema50 count as one 'ema'; "
+        "donchian_high/low count as one; raw close is free; mtf_filter=true counts as one)",
+        "give each indicator a role: 1 entry trigger, 1 trend/regime filter, "
+        "1 volatility or volume filter, optionally 1-2 confirmations",
+        "entry_long and entry_short should mirror each other",
+        "never propose empty entries or no-trade philosophies",
+    ]
+
+
+_EXIT_OPTIONS = (
+    "exit keys: atr_stop, reward_r, leverage; optional (0/false = off): breakeven_r = move SL "
+    "to entry after +xR; trail_atr = trailing stop at close - k*ATR; max_bars = close after "
+    "N 15m bars; exit_on_opposite = close when the opposite entry fires"
+)
+
+_SPEC_EXAMPLE = {
+    "name": "trend_pullback",
+    "entry_long": [
+        {"ind": "rsi", "params": {"period": 14}, "op": "cross_up", "value": 40},
+        {"ind": "dist_to_ema", "params": {"period": 200}, "op": "gt", "value": 0},
+    ],
+    "entry_short": [
+        {"ind": "rsi", "params": {"period": 14}, "op": "cross_down", "value": 60},
+        {"ind": "dist_to_ema", "params": {"period": 200}, "op": "lt", "value": 0},
+    ],
+    "filters": [
+        {"ind": "adx", "params": {"period": 14}, "op": "gte", "value": 18},
+        {"ind": "atr_pct", "params": {"period": 14}, "op": "lte", "value": 0.03},
+    ],
+    "exit": {"atr_period": 14, "atr_stop": 1.5, "reward_r": 2.0, "leverage": 2, "breakeven_r": 1.0},
+    "mtf_filter": False,
+}
+
+
+def propose_family_drafts(
     market_summary: dict,
-    count: int = 12,
+    count: int,
     *,
     research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
-    starvation: dict | None = None,
-) -> list[Genome]:
-    if not config.LLM_RESEARCH_ENABLED:
-        logger.info("LLM researcher disabled via LLM_RESEARCH_ENABLED")
-        return []
-    allowed = {
-        "family": list(FAMILIES),
-        "fast": [5, 8, 10, 12, 16, 20, 24, 30],
-        "slow": [30, 40, 50, 75, 100, 150, 200],
-        "rsi_low": [20, 25, 30, 35, 40],
-        "rsi_high": [60, 65, 70, 75, 80],
-        "breakout_n": [10, 15, 20, 30, 40, 55],
-        "atr_stop": [1.2, 1.5, 1.8, 2.0, 2.5, 3.0],
-        "reward_r": [1.2, 1.5, 1.8, 2, 2.5, 3, 4],
-        "volume_filter": [0, 1, 1.2, 1.5],
-        "trend_filter": [True, False],
-        "max_atr_pct": [0.025, 0.04, 0.06, 0.08],
-        "leverage": list(config.LEVERAGE_CANDIDATES),
-        "funding_abs_max": [0.0002, 0.0005, 0.001, 0.002],
-        "oi_change_min": [0, 0.005, 0.01, 0.02],
-        "volatility_mode": ["any", "high", "low"],
-        "mtf_filter": [True, False],
-    }
-    ctx = _load_research_context()
-    starve = starvation or {}
-    prompt = {
-        "task": (
-            "Propose diverse, testable BTCUSDT perpetual futures strategy hypotheses. "
-            "Do not claim profitability. Return JSON only. "
-            "tick_history / starvation diagnose WHY the current Champion stayed flat "
-            "(volume_filter, max_atr, mtf, setup). Respond by proposing NEW genomes with "
-            "looser or different parameters — do NOT suggest live filter overrides, "
-            "and do NOT invent per-candle BUY/SELL instructions."
-        ),
-        "market_summary": market_summary,
-        "research_focus": research_focus or [],
-        "starvation": {
-            "starving": bool(starve.get("starving")),
-            "skip_ratio": starve.get("skip_ratio"),
-            "top_reasons": starve.get("top_reasons"),
-            "focus": starve.get("focus"),
-            "summary": starve.get("summary"),
-        },
-        "market_notes": ctx["combined"],
-        "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
-        "allowed_values": allowed,
-        "requirements": [
-            "diverse families and parameter combinations",
-            "avoid lookahead",
-            "prefer interpretable hypotheses",
-            "do not optimize only for recent noise",
-            "use only allowed_values",
-            "if starving / chronic SKIP: majority of proposals must address top_reasons "
-            "(lower volume_filter, higher max_atr_pct, mtf_filter=false, or other families)",
-        ],
-        "output_schema": {
-            "proposals": [
-                {
-                    "family": "one allowed family",
-                    "fast": 12,
-                    "slow": 50,
-                    "rsi_low": 30,
-                    "rsi_high": 70,
-                    "breakout_n": 20,
-                    "atr_stop": 2.0,
-                    "reward_r": 2.0,
-                    "volume_filter": 0,
-                    "trend_filter": True,
-                    "max_atr_pct": 0.06,
-                    "leverage": 2,
-                    "funding_abs_max": 0.001,
-                    "oi_change_min": 0.005,
-                    "volatility_mode": "any",
-                    "mtf_filter": False,
-                }
-            ]
-        },
-    }
-    obj = _llm_chat(
-        "You are a quantitative research scientist. "
-        "Never assert a strategy is profitable without out-of-sample evidence.",
-        json.dumps(prompt),
-        temperature=0.8,
-    )
-    if not isinstance(obj, dict):
-        return []
-    proposals: list[Genome] = []
-    for item in obj.get("proposals", [])[:count]:
-        if not isinstance(item, dict):
-            continue
-        g = genome_from_dict(item)
-        if g:
-            proposals.append(g)
-    logger.info("LLM researcher returned %d validated strategy proposals", len(proposals))
-    return proposals
-
-
-def propose_specs(
-    market_summary: dict,
-    count: int = 8,
-    *,
-    research_focus: list[str] | None = None,
-    tick_history_text: str | None = None,
-    starvation: dict | None = None,
     learning: dict | None = None,
 ) -> list[dict]:
-    """LLM proposes Strategy Specs from indicator catalog (PnL-first, no forever-flat)."""
+    """Genesis: drafts of the bot's single indicator family; walk-forward picks v1."""
     if not config.LLM_RESEARCH_ENABLED:
         return []
     from modules.indicator_catalog import catalog_for_prompt
-    from modules.strategy_spec import normalize_spec, validate_spec
+    from modules.strategy_spec import family_shape_ok, normalize_spec
 
-    ctx = _load_research_context()
-    starve = starvation or {}
     learning = learning or {}
     prompt = {
         "task": (
-            "MISSION: positive expectancy / PnL after fees on BTCUSDT paper. "
-            "Propose Strategy Specs by COMBINING catalog indicators (classic methods OK). "
-            "LEARN FROM HISTORY: research_memory lists Specs already evaluated out-of-sample "
-            "(best and worst) and real paper results; do NOT re-propose the worst ones or "
-            "near-copies, build on indicators that qualified. recent_trades show the "
-            "indicator values and regime at entry for real paper trades — use the "
-            "win/loss patterns (e.g. losers cluster in range regime → add a trend filter). "
-            "Do NOT recommend standing aside forever or HOLD-only strategies. "
-            "If starving (chronic SKIP), propose LOOSER filters and alternate indicators "
-            "so the system can take learnable trades. JSON only."
+            "MISSION: positive expectancy / PnL after fees on BTCUSDT perpetual paper trading, 15m. "
+            "Design the bot's ONE indicator family. It will be the only strategy: later research "
+            "rounds will edit it (add/remove/replace/tune indicators) version by version. "
+            f"Give {count} alternative drafts with DIFFERENT core ideas (trend, pullback, breakout, "
+            "mean-revert, order flow...) so out-of-sample testing can pick the best as v1. "
+            "LEARN FROM HISTORY: research_memory lists Specs already evaluated out-of-sample and "
+            "real paper results — build on indicators that qualified, avoid the worst ones. "
+            "Name each draft with a short snake_case family name. JSON only."
         ),
         "mission": "pnl_positive_priority_accept_controlled_risk",
         "market_summary": market_summary,
         "research_focus": research_focus or [],
-        "starvation": starve,
         "research_memory": learning.get("research_memory") or "",
         "lessons": learning.get("lessons") or "",
         "recent_trades": learning.get("recent_trades") or [],
-        "market_notes": ctx["combined"],
+        "market_notes": _load_research_context()["combined"],
         "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
         "catalog": catalog_for_prompt(),
         "leverage_candidates": list(config.LEVERAGE_CANDIDATES),
-        "output_schema": {
-            "specs": [
-                {
-                    "name": "rsi_ema_example",
-                    "entry_long": [
-                        {
-                            "ind": "rsi",
-                            "params": {"period": 14},
-                            "op": "lt",
-                            "value": 35,
-                        }
-                    ],
-                    "entry_short": [
-                        {
-                            "ind": "rsi",
-                            "params": {"period": 14},
-                            "op": "gt",
-                            "value": 65,
-                        }
-                    ],
-                    "filters": [
-                        {
-                            "ind": "vol_ratio",
-                            "params": {"period": 20},
-                            "op": "gte",
-                            "value": 1.0,
-                        }
-                    ],
-                    "exit": {
-                        "atr_period": 14,
-                        "atr_stop": 1.5,
-                        "reward_r": 2.0,
-                        "leverage": 2,
-                        "breakeven_r": 1.0,
-                        "trail_atr": 0,
-                        "max_bars": 0,
-                        "exit_on_opposite": False,
-                    },
-                    "mtf_filter": False,
-                }
-            ]
-        },
-        "exit_options": (
-            "optional exit keys (0/false = off): breakeven_r = move SL to entry after +xR; "
-            "trail_atr = trailing stop at close - k*ATR; max_bars = close after N 15m bars; "
-            "exit_on_opposite = close when the opposite entry fires"
-        ),
-        "requirements": [
-            "only catalog indicators and allowed params",
-            "each spec needs entry_long and/or entry_short",
-            "prefer interpretable classic setups (trend, pullback, breakout, mean-revert)",
-            "never propose empty entries or no-trade philosophies",
-            "keep each side to <= 4 conditions including filters (complexity is penalised)",
-        ],
+        "exit_options": _EXIT_OPTIONS,
+        "requirements": _family_rules(),
+        "output_schema": {"specs": [_SPEC_EXAMPLE]},
     }
     obj = _llm_chat(
-        "You design indicator-based futures specs for paper research. "
+        "You design indicator-based futures strategies for paper research. "
         "Goal is positive PnL expectancy; accept risk within leverage bounds. "
         "Never advise perpetual flat.",
         json.dumps(prompt, default=str),
@@ -282,72 +159,105 @@ def propose_specs(
     if not isinstance(obj, dict):
         return []
     out: list[dict] = []
-    for item in (obj.get("specs") or obj.get("proposals") or [])[:count]:
+    for item in (obj.get("specs") or [])[:count]:
         if not isinstance(item, dict):
             continue
         s = normalize_spec(item)
-        ok, msg = validate_spec(s)
-        if ok:
-            out.append(s)
-        else:
-            logger.info("LLM spec rejected: %s", msg)
-    logger.info("LLM propose_specs validated=%d", len(out))
+        ok, msg = family_shape_ok(s)
+        if not ok:
+            logger.info("LLM draft %s rejected: %s", s.get("name"), msg)
+            continue
+        s["variant"] = {"source": "llm_genesis", "reason": str(item.get("reason") or "")[:300]}
+        out.append(s)
+    logger.info("LLM family drafts validated=%d", len(out))
     return out
 
 
-def propose_spec_patch(
+def propose_family_changes(
     current_spec: dict,
     *,
+    mode: str,
+    count: int,
+    family_history: list[dict] | None = None,
     paper_stats: dict | None = None,
+    research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
     learning: dict | None = None,
 ) -> list[dict]:
-    """Propose at most small patches (tune/add/remove one indicator condition)."""
+    """Edits to the family. Returns [{"ops": [...], "reason": str}] — Python tests each one."""
     if not config.LLM_RESEARCH_ENABLED:
         return []
     from modules.indicator_catalog import catalog_for_prompt
+    from modules.strategy_spec import indicator_types
 
     learning = learning or {}
+    if mode == "rework":
+        scope = (
+            "REWORK: the current version keeps failing. Each variant may use up to 4 ops and may "
+            "REPLACE the core entry trigger indicator, change the trend/volatility filters and exits."
+        )
+    else:
+        scope = (
+            "PATCH: keep the core entry idea. Each variant uses 1-2 ops: add, remove, replace or "
+            "tune ONE indicator condition, or adjust exits."
+        )
     prompt = {
         "task": (
-            "MISSION: improve paper PnL/expectancy. "
-            "Given current Strategy Spec and paper stats, propose up to 3 patches. "
-            "Each patch changes ONE condition: action=tune|add|remove on "
-            "target=entry_long|entry_short|filters. "
-            "Base every patch on evidence: compare indicator values and regime at entry "
-            "for winners vs losers in recent_trades, and explain the pattern in reason. "
+            "MISSION: improve paper PnL / expectancy of the bot's single indicator family. "
+            f"Propose {count} alternative variants of the current version. {scope} "
+            "Base every variant on evidence: family_history shows what each past edit changed and "
+            "how that version did (backtest + real paper) — repeat edits that helped, do not "
+            "repeat edits that hurt. Compare indicator values and regime at entry for winners vs "
+            "losers in recent_trades. Explain the evidence in reason. "
             "Do NOT suggest stopping trading. JSON only."
         ),
+        "mode": mode,
         "current_spec": current_spec,
+        "current_indicator_types": indicator_types(current_spec),
+        "family_history": family_history or [],
         "paper_stats": paper_stats or {},
+        "research_focus": research_focus or [],
         "recent_trades": learning.get("recent_trades") or [],
         "lessons": learning.get("lessons") or "",
         "research_memory": learning.get("research_memory") or "",
         "tick_history": (tick_history_text or "")[:1200],
         "catalog": catalog_for_prompt(),
+        "leverage_candidates": list(config.LEVERAGE_CANDIDATES),
+        "exit_options": _EXIT_OPTIONS,
+        "requirements": _family_rules(),
+        "ops_reference": [
+            {"action": "add", "target": "entry_long|entry_short|filters", "condition": {"ind": "adx", "params": {"period": 14}, "op": "gte", "value": 20}},
+            {"action": "remove", "target": "filters", "index": 0},
+            {"action": "replace", "target": "entry_long", "index": 0, "condition": {"ind": "stoch_k", "params": {"period": 14}, "op": "cross_up", "value": 20}},
+            {"action": "tune", "target": "filters", "index": 1, "params": {"period": 20}, "value": 1.2},
+            {"action": "exit", "exit": {"atr_stop": 1.8, "reward_r": 2.5, "trail_atr": 2.0}},
+            {"action": "mtf", "value": True},
+        ],
         "output_schema": {
-            "patches": [
+            "variants": [
                 {
-                    "action": "tune",
-                    "target": "filters",
-                    "index": 0,
-                    "params": {"period": 14},
-                    "value": 1.0,
-                    "reason": "loosen volume to get more samples with edge",
+                    "reason": "losers cluster in range regime (adx<18) → add adx trend filter",
+                    "ops": [
+                        {"action": "add", "target": "filters", "condition": {"ind": "adx", "params": {"period": 14}, "op": "gte", "value": 18}}
+                    ],
                 }
             ]
         },
     }
     obj = _llm_chat(
-        "You patch indicator specs for better expectancy. Never recommend flat forever.",
+        "You improve one indicator strategy family for better expectancy. "
+        "Never recommend flat forever.",
         json.dumps(prompt, default=str),
-        temperature=0.5,
+        temperature=0.6 if mode == "rework" else 0.5,
     )
     if not isinstance(obj, dict):
         return []
-    patches = [p for p in (obj.get("patches") or [])[:5] if isinstance(p, dict)]
-    logger.info("LLM propose_spec_patch n=%d", len(patches))
-    return patches
+    out = []
+    for v in (obj.get("variants") or [])[:count]:
+        if isinstance(v, dict) and isinstance(v.get("ops"), list) and v["ops"]:
+            out.append({"ops": v["ops"][:6], "reason": str(v.get("reason") or "")[:300]})
+    logger.info("LLM family %s variants n=%d", mode, len(out))
+    return out
 
 
 def review_research_report(report_lite: dict) -> dict[str, Any]:
