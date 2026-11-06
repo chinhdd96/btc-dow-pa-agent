@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -28,10 +29,42 @@ _preferred_fapi: str | None = None
 _use_spot_klines = False
 
 
+_thread_sessions = threading.local()
+
+
 def _session_get(url: str, params: dict | None = None, timeout: int = 25) -> requests.Response:
-    _session.verify = config.BINANCE_SSL_VERIFY
-    _session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
-    return _session.get(url, params=params, timeout=timeout)
+    # requests.Session is not thread-safe; research runs in a background thread
+    sess = getattr(_thread_sessions, "s", None)
+    if sess is None:
+        sess = _session if threading.current_thread() is threading.main_thread() else requests.Session()
+        _thread_sessions.s = sess
+    sess.verify = config.BINANCE_SSL_VERIFY
+    sess.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    return sess.get(url, params=params, timeout=timeout)
+
+
+def fetch_recent_1m(
+    symbol: str | None = None,
+    *,
+    start_ms: int | None = None,
+    limit: int = 2,
+) -> list[dict]:
+    """Latest 1m klines incl. the still-forming one (live SL/TP watch)."""
+    params: dict = {"symbol": symbol or config.SYMBOL, "interval": "1m", "limit": limit}
+    if start_ms is not None:
+        params["startTime"] = int(start_ms)
+    rows = _get("/fapi/v1/klines", params, timeout=10) or []
+    return [
+        {
+            "open_time_ms": int(r[0]),
+            "open": float(r[1]),
+            "high": float(r[2]),
+            "low": float(r[3]),
+            "close": float(r[4]),
+            "close_time_ms": int(r[6]),
+        }
+        for r in rows
+    ]
 
 
 def _spot_klines(params: dict) -> object:
@@ -386,6 +419,29 @@ def enrich_multi_timeframe(
             logger.warning("%s context unavailable: %s", interval, exc)
             x[f"{prefix}_bull"] = np.nan
     return x.reset_index(drop=True)
+
+
+def estimate_depth_impact(symbol: str, side: int, qty: float) -> float | None:
+    """Fractional cost of walking the public book vs best price (never submits)."""
+    try:
+        book = _get("/fapi/v1/depth", {"symbol": symbol, "limit": 100}, timeout=10)
+        levels = book["asks"] if side == 1 else book["bids"]
+        best = float(levels[0][0])
+        remaining, notional = qty, 0.0
+        for px_s, q_s in levels:
+            px, avail = float(px_s), float(q_s)
+            take = min(remaining, avail)
+            notional += take * px
+            remaining -= take
+            if remaining <= 1e-12:
+                break
+        filled = qty - remaining
+        if filled <= 0 or best <= 0:
+            return None
+        return max(0.0, (notional / filled / best - 1) * side)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Depth snapshot unavailable: %s", exc)
+        return None
 
 
 def estimate_depth_fill(

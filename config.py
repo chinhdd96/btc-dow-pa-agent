@@ -242,6 +242,30 @@ SPEC_REPLACE_MIN_TRADES = int(os.getenv("SPEC_REPLACE_MIN_TRADES", "20"))
 SPEC_PATCH_COOLDOWN_HOURS = float(os.getenv("SPEC_PATCH_COOLDOWN_HOURS", "6"))
 PAPER_POLL_SECONDS = int(os.getenv("PAPER_POLL_SECONDS", "20"))
 RESEARCH_EVERY_HOURS = float(os.getenv("RESEARCH_EVERY_HOURS", "24"))
+
+
+def _env_bool(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+LEARNER_ENABLED = _env_bool("LEARNER_ENABLED", "false")
+NEWS_ENABLED = _env_bool("NEWS_ENABLED", "true")
+# Live position watch between 15m closes (1m kline high/low, 1 request per poll)
+LIVE_EXIT_ENABLED = _env_bool("LIVE_EXIT_ENABLED", "true")
+CANDLE_CLOSE_GRACE_SECONDS = int(os.getenv("CANDLE_CLOSE_GRACE_SECONDS", "5"))
+# Same indicator history as backtest (EMA200 needs long warm-up)
+PAPER_WARMUP_BARS = int(os.getenv("PAPER_WARMUP_BARS", "1000"))
+RESEARCH_RETRY_MINUTES = float(os.getenv("RESEARCH_RETRY_MINUTES", "30"))
+RESEARCH_RUNS_KEEP = int(os.getenv("RESEARCH_RUNS_KEEP", "60"))
+LLM_RECENT_TRADES = int(os.getenv("LLM_RECENT_TRADES", "20"))
+# Walk-forward out-of-sample evaluation
+WF_FOLDS = int(os.getenv("WF_FOLDS", "4"))
+WF_MIN_POSITIVE_FOLDS = int(os.getenv("WF_MIN_POSITIVE_FOLDS", "3"))
+SPEC_MAX_CONDS_FREE = int(os.getenv("SPEC_MAX_CONDS_FREE", "4"))
+# Shadow Specs: forward-test challengers on live candles without real equity
+SHADOW_SLOTS = int(os.getenv("SHADOW_SLOTS", "3"))
+SHADOW_MIN_TRADES = int(os.getenv("SHADOW_MIN_TRADES", "8"))
+SHADOW_MAX_DAYS = float(os.getenv("SHADOW_MAX_DAYS", "7"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))
 LLM_RESEARCH_ENABLED = os.getenv("LLM_RESEARCH_ENABLED", "true").strip().lower() in {
     "1",

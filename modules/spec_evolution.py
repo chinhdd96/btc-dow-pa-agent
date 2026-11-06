@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 import config
-from modules.backtest_engine import evaluate_spec
+from modules.spec_backtest import evaluate_spec
 from modules.champion_store import get_paper_state
 from modules.features import add_features as add_base_features
 from modules.strategy_spec import (
@@ -88,6 +88,14 @@ def _mutate_spec(spec: dict, rng: random.Random) -> dict:
         s["exit"]["leverage"] = rng.choice(list(config.LEVERAGE_CANDIDATES))
     if rng.random() < 0.25:
         s["mtf_filter"] = not s["mtf_filter"]
+    if rng.random() < 0.2:
+        s["exit"]["breakeven_r"] = rng.choice([0, 0, 0.8, 1.0, 1.5])
+    if rng.random() < 0.2:
+        s["exit"]["trail_atr"] = rng.choice([0, 0, 1.5, 2.0, 3.0])
+    if rng.random() < 0.15:
+        s["exit"]["max_bars"] = rng.choice([0, 0, 16, 32, 64])
+    if rng.random() < 0.1:
+        s["exit"]["exit_on_opposite"] = not s["exit"].get("exit_on_opposite")
     # Mutate one filter/entry threshold if present
     for key in ("filters", "entry_long", "entry_short"):
         block = s.get(key) or []
@@ -105,7 +113,7 @@ def _mutate_spec(spec: dict, rng: random.Random) -> dict:
             break
     s["name"] = variant_name(s.get("name"), "m")
     ok, _ = validate_spec(s)
-    return s if ok else normalize_spec(spec)
+    return normalize_spec(s) if ok else normalize_spec(spec)
 
 
 class SpecEvolution:

@@ -95,11 +95,45 @@ def format_spec_telegram(
         lines.append("FILTER: " + " AND ".join(_fmt_cond(c) for c in filters if isinstance(c, dict)))
     else:
         lines.append("FILTER: (none)")
-    ex = s.get("exit") or {}
-    lines.append(
-        f"EXIT: atr×{ex.get('atr_stop')} RR={ex.get('reward_r')} lev={ex.get('leverage')}x"
-    )
+    lines.append("EXIT: " + format_exit(s.get("exit") or {}))
     return "\n".join(lines)
+
+
+def format_exit(ex: dict[str, Any]) -> str:
+    parts = [f"atr×{ex.get('atr_stop')} RR={ex.get('reward_r')} lev={ex.get('leverage')}x"]
+    if ex.get("breakeven_r"):
+        parts.append(f"BE@{ex['breakeven_r']}R")
+    if ex.get("trail_atr"):
+        parts.append(f"trail {ex['trail_atr']}×ATR")
+    if ex.get("max_bars"):
+        parts.append(f"max {ex['max_bars']} nến")
+    if ex.get("exit_on_opposite"):
+        parts.append("đóng khi tín hiệu ngược")
+    return " | ".join(parts)
+
+
+def spec_requirements(spec: dict[str, Any]) -> list[tuple[str, dict]]:
+    from modules.features_catalog import collect_requirements
+
+    s = normalize_spec(spec)
+    conds = [
+        c
+        for key in ("entry_long", "entry_short", "filters")
+        for c in (s.get(key) or [])
+        if isinstance(c, dict)
+    ]
+    return collect_requirements(conds)
+
+
+def short_conditions(spec: dict[str, Any], max_len: int = 220) -> str:
+    s = normalize_spec(spec)
+    parts = []
+    for key, tag in (("entry_long", "L"), ("entry_short", "S"), ("filters", "F")):
+        conds = [c for c in (s.get(key) or []) if isinstance(c, dict)]
+        if conds:
+            parts.append(f"{tag}: " + " & ".join(_fmt_cond(c) for c in conds))
+    text = " | ".join(parts) + f" | X: {format_exit(s.get('exit') or {})}"
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
 def normalize_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -116,6 +150,20 @@ def normalize_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if lev not in config.LEVERAGE_CANDIDATES:
         lev = config.LEVERAGE_CANDIDATES[0]
     exit_cfg["leverage"] = lev
+    # Optional exits are omitted when off so older Specs keep their spec_id
+    for key, cast in (("trail_atr", float), ("breakeven_r", float), ("max_bars", int)):
+        try:
+            val = cast(exit_cfg.get(key) or 0)
+        except (TypeError, ValueError):
+            val = 0
+        if val > 0:
+            exit_cfg[key] = val
+        else:
+            exit_cfg.pop(key, None)
+    if exit_cfg.get("exit_on_opposite"):
+        exit_cfg["exit_on_opposite"] = True
+    else:
+        exit_cfg.pop("exit_on_opposite", None)
     out["exit"] = exit_cfg
     out["mtf_filter"] = bool(out.get("mtf_filter", False))
     return out

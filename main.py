@@ -1,40 +1,45 @@
 """
 Champion Research Agent — live Binance data, PAPER fills only.
 
-Flow:
-  LLM propose → evolution/backtest/validation → Champion promote
-  → paper on closed live candles → post-mortem / decay → re-research
+Main loop (every PAPER_POLL_SECONDS):
+  1. apply a finished background research (Champion / shadows)
+  2. live watch: pending fill + SL/TP/LIQ on 1m high/low (1 light request)
+  3. on a new closed 15m candle: full data fetch → Champion + shadow processing
+  4. start background research when due (no Spec / flagged / stale)
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import schedule
 
 import config
-from modules import champion_backup
-from modules import champion_store
-from modules import strategy_decay
+from modules import champion_backup, champion_store, research_memory, shadow_book
+from modules import strategy_decay, tick_history
 from modules.archive_state import archive_learn_state
 from modules.learner_crawler import run_learner_crawler
 from modules.llm_researcher import post_mortem_paper_trade
 from modules.memory_manager import MemoryManager
 from modules.news_crawler import run_news_crawler
 from modules.notifier import Notifier
-from modules.paper_champion import PaperChampion
+from modules.paper_champion import PaperChampion, interval_td
 from modules.quant_data import (
     enrich_derivatives_data,
     enrich_multi_timeframe,
     fetch_klines,
+    fetch_recent_1m,
 )
-from modules.research_pipeline import run_research
-from modules import tick_history
+from modules.research_pipeline import apply_research, compute_research
+from modules.strategy_spec import format_spec_telegram
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,243 +50,310 @@ logger = logging.getLogger("main")
 
 def _load_runtime() -> dict[str, Any]:
     path = Path(config.PATHS["STATE"])
-    if not path.exists():
-        return {"last_research_ts": 0.0, "last_compact_week": None}
     try:
-        import json
-
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {"last_research_ts": 0.0, "last_compact_week": None}
 
 
 def _save_runtime(state: dict[str, Any]) -> None:
-    import json
-
     path = Path(config.PATHS["STATE"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def job_research(notifier: Notifier, memory: MemoryManager) -> dict | None:
+def _backup(reason: str) -> None:
     try:
-        logger.info("=== Research job start ===")
-        report = run_research(use_llm=config.LLM_RESEARCH_ENABLED)
-        champ_spec = report.get("champion_spec") or {}
-        review = report.get("ai_review") or {}
-        ev = report.get("champion_evaluation") or {}
-        research_mode = (report.get("config") or {}).get("research_mode") or "—"
-        promote_mode = report.get("promote_mode") or "—"
-        sid = ev.get("spec_id") or report.get("champion_spec_id") or "—"
-        msg = (
-            "RESEARCH Spec xong (PAPER only | PnL-first)\n"
-            f"Spec={champ_spec.get('name') or 'NONE'} id={sid}\n"
-            f"mode={research_mode} promote={promote_mode}\n"
-            f"Qualified top={sum(1 for c in report.get('top_candidates') or [] if c.get('qualified'))}\n"
-            f"AI review: {(review.get('summary') or '')[:400]}"
-        )
-        notifier.send(msg)
-        # Dedicated note whenever a Spec/family (indicator set) is chosen
-        if champ_spec:
-            from modules.strategy_spec import format_spec_telegram
+        champion_backup.backup_remote(force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("champion backup after %s failed: %s", reason, exc)
 
-            notifier.send(
-                format_spec_telegram(
-                    champ_spec,
-                    sid=str(sid) if sid != "—" else None,
-                    promote_mode=str(promote_mode),
-                    research_mode=str(research_mode),
-                    source="LLM+evolution" if config.LLM_RESEARCH_ENABLED else "evolution",
-                )
-            )
+
+# --- research in background --------------------------------------------------------
+
+
+class ResearchWorker:
+    """Runs compute_research() in a thread; the main thread applies the result."""
+
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._result: dict | None = None
+        self._error: str | None = None
+        self.last_fail_ts = 0.0
+        self.started_ts = 0.0
+
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, reason: str) -> None:
+        if self.running():
+            return
+        self._result, self._error = None, None
+        self.started_ts = time.time()
+        logger.info("=== Research start (background) reason=%s ===", reason)
+
+        def _run() -> None:
+            try:
+                self._result = compute_research(use_llm=config.LLM_RESEARCH_ENABLED)
+            except Exception:  # noqa: BLE001
+                self._error = traceback.format_exc()
+
+        self._thread = threading.Thread(target=_run, name="research", daemon=True)
+        self._thread.start()
+
+    def poll(self, notifier: Notifier) -> None:
+        if self._thread is None or self._thread.is_alive():
+            return
+        self._thread = None
+        mins = (time.time() - self.started_ts) / 60
+        if self._error:
+            self.last_fail_ts = time.time()
+            logger.error("research failed:\n%s", self._error)
+            notifier.notify_error("research", self._error.strip().splitlines()[-1][:300])
+            return
+        try:
+            report = apply_research(self._result or {})
+        except Exception:  # noqa: BLE001
+            self.last_fail_ts = time.time()
+            err = traceback.format_exc()
+            logger.error("apply_research failed:\n%s", err)
+            notifier.notify_error("apply_research", err.strip().splitlines()[-1][:300])
+            return
         rt = _load_runtime()
         rt["last_research_ts"] = time.time()
         _save_runtime(rt)
-        # Clear decay flag after research
-        st = champion_store.get_paper_state()
-        st["research_due"] = False
-        st["last_spec_research_ts"] = time.time()
-        champion_store.set_paper_state(st)
-        try:
-            champion_backup.backup_remote(force=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("champion backup after research failed: %s", exc)
-        logger.info("=== Research job done ===")
-        return report
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("research job failed")
-        notifier.notify_error("job_research", str(exc))
+        _notify_research(notifier, report, mins)
+        _backup("research")
+        logger.info("=== Research applied (%.1f min) ===", mins)
+
+
+def _notify_research(notifier: Notifier, report: dict, minutes: float) -> None:
+    champ = report.get("champion_spec") or {}
+    ev = report.get("champion_evaluation") or {}
+    review = report.get("ai_review") or {}
+    cfg = report.get("config") or {}
+    top = report.get("top_candidates") or []
+    lines = [
+        f"RESEARCH Spec xong ({minutes:.1f} phút, PAPER only | PnL-first)",
+        f"Spec={champ.get('name') or 'NONE'} id={ev.get('spec_id') or '—'}",
+        f"mode={cfg.get('research_mode') or '—'} promote={report.get('promote_mode') or '—'} "
+        f"nguồn={report.get('promote_source') or '—'}",
+        f"Qualified top={sum(1 for c in top if c.get('qualified'))} | "
+        f"folds+={ev.get('positive_folds')}/{cfg.get('wf_folds')}",
+    ]
+    if report.get("shadow_events"):
+        lines += report["shadow_events"]
+    if report.get("shadows"):
+        lines.append("SHADOW:")
+        lines += report["shadows"]
+    lines.append(f"AI review: {(review.get('summary') or '')[:400]}")
+    notifier.send("\n".join(lines))
+    if champ:
+        notifier.send(
+            format_spec_telegram(
+                champ,
+                sid=ev.get("spec_id"),
+                promote_mode=str(report.get("promote_mode") or "—"),
+                research_mode=str(cfg.get("research_mode") or "—"),
+                source=str(report.get("promote_source") or "evolution"),
+            )
+        )
+
+
+def research_reason(worker: ResearchWorker) -> str | None:
+    if worker.running():
         return None
+    if time.time() - worker.last_fail_ts < config.RESEARCH_RETRY_MINUTES * 60:
+        return None
+    st = champion_store.get_paper_state()
+    if not st.get("champion_spec"):
+        return "no_spec"
+    if st.get("research_due"):
+        return f"due:{st.get('research_mode') or 'replace'}"
+    last_ts = max(
+        float(_load_runtime().get("last_research_ts") or 0),
+        float(st.get("last_spec_research_ts") or 0),
+    )
+    if time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600:
+        return "stale"
+    return None
+
+
+# --- trades ------------------------------------------------------------------------------
 
 
 def _handle_closed_trade(
     trade: dict,
+    trader: PaperChampion,
     notifier: Notifier,
     memory: MemoryManager,
 ) -> None:
-    st = champion_store.get_paper_state()
-    genome = st.get("champion")
-    pm = post_mortem_paper_trade(trade, genome=genome)
+    st = trader.state
+    pm = post_mortem_paper_trade(
+        trade,
+        spec=st.get("champion_spec"),
+        recent_trades=research_memory.recent_trades_for_prompt(10),
+    )
     lesson = pm.get("lesson") or ""
     if lesson:
         try:
             memory.add_lesson(
-                regime="CHAMPION_PAPER",
+                regime=str(((trade.get("entry_context") or {}).get("regime") or {}).get("tag") or "CHAMPION_PAPER"),
                 mistake_or_insight=lesson,
-                actionable_rule=f"genome={trade.get('genome_id')} {pm.get('classification')}",
+                actionable_rule=pm.get("actionable_rule") or f"spec={trade.get('spec_id')} {pm.get('classification')}",
                 classification=str(pm.get("classification") or ""),
                 setup_tag=str(trade.get("family") or ""),
                 close_reason=str(trade.get("exit_reason") or ""),
                 pnl=float(trade.get("pnl") or 0),
+                r_multiple=trade.get("r_multiple"),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("add_lesson failed: %s", exc)
+    if pm.get("research_hints"):
+        st["research_hints"] = (list(st.get("research_hints") or []) + pm["research_hints"])[-9:]
 
-    hints = pm.get("challenger_hints") or []
-    if hints:
-        existing = list(st.get("challenger_hints") or [])
-        existing.extend(hints)
-        st["challenger_hints"] = existing[-16:]
-        champion_store.set_paper_state(st)
-
-    if pm.get("decay_signal"):
-        st = champion_store.get_paper_state()
-        st["research_due"] = True
-        st["research_mode"] = "replace"
-        champion_store.set_paper_state(st)
-
-    # Spec patch/replace cadence by trades on current Spec (PnL learning)
-    st_n = champion_store.get_paper_state()
-    trades_on = int(st_n.get("trades_on_spec") or 0)
-    last_sr = float(st_n.get("last_spec_research_ts") or 0)
-    cooled = (time.time() - last_sr) >= config.SPEC_PATCH_COOLDOWN_HOURS * 3600
-    if cooled and trades_on >= config.SPEC_REPLACE_MIN_TRADES:
-        st_n["research_due"] = True
-        st_n["research_mode"] = "replace"
-        champion_store.set_paper_state(st_n)
-    elif cooled and trades_on >= config.SPEC_PATCH_MIN_TRADES:
-        st_n["research_due"] = True
-        st_n["research_mode"] = "patch"
-        champion_store.set_paper_state(st_n)
-
-    decay = strategy_decay.check_decay()
-    side = "LONG" if trade.get("side") == 1 else "SHORT"
-    notifier.send(
-        f"PAPER CLOSE {side} {trade.get('exit_reason')}\n"
-        f"PnL={float(trade.get('pnl') or 0):+.4f}u | "
-        f"Equity={float(trade.get('equity_after') or st.get('equity') or 0):.2f}u\n"
-        f"Genome={trade.get('genome_id')} | {pm.get('classification')}\n"
-        f"{(lesson or '')[:300]}\n"
-        f"Decay={decay.get('decay')} {decay.get('reason') or ''}"
+    cooled = (
+        time.time() - float(st.get("last_spec_research_ts") or 0)
+        >= config.SPEC_PATCH_COOLDOWN_HOURS * 3600
     )
+    decay = strategy_decay.check_decay(dict(st))
+    trades_on = int(st.get("trades_on_spec") or 0)
+    if cooled and (pm.get("decay_signal") or decay.get("decay") or trades_on >= config.SPEC_REPLACE_MIN_TRADES):
+        st["research_due"], st["research_mode"] = True, "replace"
+    elif cooled and trades_on >= config.SPEC_PATCH_MIN_TRADES:
+        st["research_due"], st["research_mode"] = True, "patch"
+    trader.save()
+
+    side = "LONG" if trade.get("side") == 1 else "SHORT"
+    r_mult = trade.get("r_multiple")
+    notifier.send(
+        f"PAPER CLOSE {side} {trade.get('exit_reason')} ({trade.get('exit_source')})\n"
+        f"PnL={float(trade.get('pnl') or 0):+.4f}u"
+        + (f" ({float(r_mult):+.2f}R)" if r_mult is not None else "")
+        + f" | Equity={float(trade.get('equity_after') or st.get('equity') or 0):.2f}u\n"
+        f"Spec={trade.get('family')} [{trade.get('spec_id')}] | {pm.get('classification')}\n"
+        f"{lesson[:300]}\n"
+        f"Decay={decay.get('decay')} {decay.get('reason') or ''}"
+        + (f"\nresearch_due → {st.get('research_mode')}" if st.get("research_due") else "")
+    )
+    _backup("close")
+
+
+def _on_open(notifier: Notifier):
+    def cb(pos: dict) -> None:
+        side = "LONG" if pos.get("side") == 1 else "SHORT"
+        regime = ((pos.get("entry_context") or {}).get("regime") or {}).get("tag")
+        notifier.send(
+            f"PAPER OPEN {side}\n"
+            f"entry={float(pos['entry']):.2f} lev={pos.get('leverage')}x "
+            f"margin={float(pos.get('margin') or 0):.2f}\n"
+            f"SL={float(pos['sl']):.2f} TP={float(pos['tp']):.2f}\n"
+            f"spec={pos.get('family')} [{pos.get('spec_id')}] regime={regime}"
+        )
+
+    return cb
+
+
+def job_live_watch(notifier: Notifier, memory: MemoryManager) -> None:
+    """Between candle closes: fill pending at next-bar open, exit on SL/TP/LIQ touches."""
     try:
-        champion_backup.backup_remote(force=True)
+        trader = PaperChampion(on_open=_on_open(notifier))
+        fill_ms = trader.pending_fill_ms()
+        now_ms = int(time.time() * 1000)
+        if fill_ms is not None and now_ms >= fill_ms:
+            bars = fetch_recent_1m(start_ms=fill_ms, limit=2)
+            if bars and bars[0]["open_time_ms"] == fill_ms:
+                bars += [b for b in fetch_recent_1m(limit=2) if b["open_time_ms"] > bars[-1]["open_time_ms"]]
+        elif trader.state.get("position") is not None:
+            bars = fetch_recent_1m(limit=2)
+        else:
+            return
+        for trade in trader.check_live(bars):
+            _handle_closed_trade(trade, trader, notifier, memory)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("champion backup after close failed: %s", exc)
+        logger.warning("live watch error: %s", exc)
+
+
+def candle_due() -> bool:
+    last = champion_store.get_paper_state().get("last_candle")
+    if not last:
+        return True
+    due = pd.Timestamp(last) + 2 * interval_td() + pd.Timedelta(seconds=config.CANDLE_CLOSE_GRACE_SECONDS)
+    return pd.Timestamp.now(tz="UTC") >= due
 
 
 def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
-    """One paper tick on live closed candles (idempotent by last_candle)."""
+    """Process every closed candle not seen yet (Champion + shadows)."""
     try:
-        rt = _load_runtime()
-        st = champion_store.get_paper_state()
-        due = bool(st.get("research_due")) or not st.get("champion_spec")
-        last_ts = max(
-            float(rt.get("last_research_ts") or 0),
-            float(st.get("last_spec_research_ts") or 0),
-        )
-        if due or (time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600):
-            job_research(notifier, memory)
-
-        # 15m: keep enough bars for indicators (~14d min); cap fetch for poll latency
         days = max(14, min(config.HISTORY_DAYS, 45 if config.TIMEFRAME_MAIN.endswith("m") else 90))
         bars = fetch_klines(config.TIMEFRAME_MAIN, days, config.SYMBOL)
         bars = enrich_derivatives_data(bars, config.SYMBOL, days)
         bars = enrich_multi_timeframe(bars, config.SYMBOL, days)
 
-        def on_open(pos: dict) -> None:
-            side = "LONG" if pos.get("side") == 1 else "SHORT"
-            notifier.send(
-                f"PAPER OPEN {side}\n"
-                f"entry={float(pos['entry']):.2f} lev={pos.get('leverage')}x "
-                f"margin={float(pos.get('margin') or 0):.2f}\n"
-                f"SL={float(pos['sl']):.2f} TP={float(pos['tp']):.2f}\n"
-                f"genome={pos.get('genome_id')} family={pos.get('family')}"
-            )
+        notify = {"on": False}
 
         def on_tick(report: dict) -> None:
-            # Research context (not AI entry). Keep even OPEN/CLOSE for flat-vs-active debug.
             try:
                 tick_history.append(report)
-            except Exception as exc:
-                logger.warning("tick_history append failed: %s", exc)
-            # Short per-candle analysis (15m close). OPEN/CLOSE still have dedicated msgs.
-            action = str(report.get("action") or "SKIP")
-            if action in {"OPEN"} or action.startswith("CLOSE_"):
-                return  # avoid duplicate with on_open / on_close
-            close = report.get("close")
-            close_s = f"{float(close):.1f}" if close is not None else "—"
-            atr = report.get("atr_pct")
-            rsi = report.get("rsi")
-            metrics = []
-            if atr is not None:
-                metrics.append(f"ATR%{float(atr)*100:.2f}")
-            if rsi is not None:
-                metrics.append(f"RSI{float(rsi):.0f}")
-            metrics_s = " · ".join(metrics)
-            candle = str(report.get("candle") or "")[-19:]
-            family = report.get("family") or "—"
-            why = str(report.get("why") or "")[:160]
-            lines = [
-                f"15m {candle}",
-                f"close={close_s}" + (f" | {metrics_s}" if metrics_s else ""),
-                f"{action} · {family}",
-                why,
-            ]
-            notifier.send("\n".join(lines))
-
-        trader = PaperChampion(
-            on_close=lambda t: _handle_closed_trade(t, notifier, memory),
-            on_open=on_open,
-            on_tick=on_tick,
-        )
-        last_seen = trader.state.get("last_candle")
-        closed_all: list[dict] = []
-        if last_seen:
-            unseen_idx = [
-                i
-                for i, ts in enumerate(bars.open_time.astype(str).tolist())
-                if ts > str(last_seen)
-            ]
-            for idx in unseen_idx:
-                closed_all.extend(
-                    trader.process(bars.iloc[max(0, idx - 205) : idx + 1])
-                )
-        else:
-            closed_all.extend(trader.process(bars))
-
-        # Chronic filter SKIP → flag early research (genome change), not live soft-entry
-        st2 = champion_store.get_paper_state()
-        diag = tick_history.maybe_flag_research_due(st2)
-        if diag and st2.get("research_due"):
-            champion_store.set_paper_state(st2)
-            try:
-                champion_backup.backup_remote(force=True)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("champion backup after starve failed: %s", exc)
+                logger.warning("tick_history append failed: %s", exc)
+            action = str(report.get("action") or "SKIP")
+            if not notify["on"] or action == "OPEN" or action.startswith("CLOSE_"):
+                return
+            close = report.get("close")
+            metrics = []
+            if report.get("atr_pct") is not None:
+                metrics.append(f"ATR%{float(report['atr_pct'])*100:.2f}")
+            if report.get("rsi") is not None:
+                metrics.append(f"RSI{float(report['rsi']):.0f}")
+            if report.get("regime"):
+                metrics.append(str(report["regime"]))
+            notifier.send(
+                "\n".join(
+                    [
+                        f"15m {str(report.get('candle') or '')[-25:]}",
+                        f"close={float(close):.1f}" + (f" | {' · '.join(metrics)}" if metrics else "")
+                        if close is not None
+                        else "close=—",
+                        f"{action} · {report.get('family') or '—'}",
+                        str(report.get("why") or "")[:160],
+                    ]
+                )
+            )
+
+        trader = PaperChampion(on_open=_on_open(notifier), on_tick=on_tick)
+        last_seen = trader.state.get("last_candle")
+        times = bars.open_time.astype(str).tolist()
+        idxs = [i for i, ts in enumerate(times) if ts > str(last_seen)] if last_seen else [len(bars) - 1]
+        if len(idxs) > 1:
+            logger.info("Replaying %d unseen candles", len(idxs))
+        for idx in idxs:
+            notify["on"] = idx == idxs[-1]
+            window = bars.iloc[max(0, idx - config.PAPER_WARMUP_BARS) : idx + 1]
+            closed = trader.process(window)
+            shadow_book.run_on_slice(trader.state, window)
+            trader.save()
+            for trade in closed:
+                _handle_closed_trade(trade, trader, notifier, memory)
+
+        st = champion_store.get_paper_state()
+        diag = tick_history.maybe_flag_research_due(st)
+        if diag and st.get("research_due"):
+            champion_store.set_paper_state(st)
+            _backup("starve")
             if diag.get("should_reresearch"):
                 notifier.send(
                     "Champion STARVING (chronic SKIP)\n"
                     f"{diag.get('summary')}\n"
                     + "\n".join((diag.get("focus") or [])[:3])
-                    + "\n→ research sớm (đổi genome, không nới filter live)"
+                    + "\n→ research sớm (đổi Spec, không nới filter live)"
                 )
-
-        if not trader.state.get("champion"):
-            logger.info("Flat: no Champion qualified yet")
     except Exception as exc:  # noqa: BLE001
         logger.error("paper tick error: %s\n%s", exc, traceback.format_exc())
         notifier.notify_error("job_paper_tick", str(exc))
+
+
+# --- context jobs -------------------------------------------------------------------------
 
 
 def job_learn(notifier: Notifier) -> None:
@@ -325,11 +397,6 @@ def job_compact(memory: MemoryManager, notifier: Notifier) -> None:
 
 def main() -> None:
     logger.info("Starting Champion Research Agent (live data, PAPER fills only)")
-    if not config.PAPER_MODE or not config.FORCE_PAPER_ONLY:
-        logger.warning(
-            "PAPER_MODE/FORCE_PAPER_ONLY expected true — enforcing paper-only semantics"
-        )
-
     try:
         archived = archive_learn_state()
         if archived:
@@ -339,57 +406,57 @@ def main() -> None:
 
     champion_store.init_db()
     try:
-        restored = champion_backup.ensure_restored()
-        if restored:
+        if champion_backup.ensure_restored():
             logger.info("Restored Champion snapshot from GitHub")
     except Exception as exc:  # noqa: BLE001
         logger.warning("champion restore skipped: %s", exc)
 
     memory = MemoryManager()
     notifier = Notifier()
+    worker = ResearchWorker()
 
-    start_msg = (
+    s = PaperChampion().summary()
+    shadows = shadow_book.summary_lines(champion_store.get_paper_state())
+    notifier.send(
         f"Champion Spec Agent khởi động {datetime.now(timezone.utc).isoformat()} UTC\n"
         f"Mode=PAPER ONLY | Mission=PnL dương (accept risk in bounds)\n"
-        f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN}\n"
-        f"Research every {config.RESEARCH_EVERY_HOURS}h | "
-        f"patch≥{config.SPEC_PATCH_MIN_TRADES} replace≥{config.SPEC_REPLACE_MIN_TRADES} trades\n"
-        f"Paper poll {config.PAPER_POLL_SECONDS}s\n"
-        f"Capital={config.INITIAL_CAPITAL:.0f}u | "
-        f"margin≤{config.MAX_MARGIN_FRACTION*100:.0f}% equity | "
-        f"lev candidates={list(config.LEVERAGE_CANDIDATES)}\n"
-        f"DB={config.RESEARCH_DB_PATH}"
-    )
-    trader = PaperChampion()
-    s = trader.summary()
-    start_msg += (
-        f"\nEquity={s['equity']:.2f}u PnL={s['pnl_total']:+.2f}u "
+        f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN} | poll {config.PAPER_POLL_SECONDS}s "
+        f"(live SL/TP={'on' if config.LIVE_EXIT_ENABLED else 'off'})\n"
+        f"Research nền: mỗi {config.RESEARCH_EVERY_HOURS:.0f}h hoặc khi cần | "
+        f"patch≥{config.SPEC_PATCH_MIN_TRADES} replace≥{config.SPEC_REPLACE_MIN_TRADES} lệnh | "
+        f"walk-forward {config.WF_FOLDS} fold\n"
+        f"Equity={s['equity']:.2f}u PnL={s['pnl_total']:+.2f}u "
         f"trades={s['trade_count']} on_spec={s.get('trades_on_spec', 0)} "
         f"spec={s['champion_family'] or 'NONE'} id={s['champion_id'] or '—'}"
+        + ("\nSHADOW:\n" + "\n".join(shadows) if shadows else "")
     )
-    notifier.send(start_msg)
 
-    # Research on startup only if no Spec / research_due / stale (job_paper_tick decides)
-    job_learn(notifier)
-    job_news(notifier)
-    job_paper_tick(notifier, memory)
-
-    schedule.every(24).hours.do(job_learn, notifier)
-    schedule.every(24).hours.do(job_news, notifier)
+    if config.LEARNER_ENABLED:
+        job_learn(notifier)
+        schedule.every(24).hours.do(job_learn, notifier)
+    if config.NEWS_ENABLED:
+        job_news(notifier)
+        schedule.every(24).hours.do(job_news, notifier)
     schedule.every().hour.do(job_compact, memory, notifier)
-    schedule.every(1).hours.do(
-        lambda: champion_backup.backup_remote(force=True)
-    )
+    schedule.every(1).hours.do(lambda: champion_backup.backup_remote(force=True))
 
+    job_paper_tick(notifier, memory)
     logger.info(
-        "Entering loop: paper tick every %ss; research every %sh or on decay",
+        "Entering loop: poll %ss, live watch=%s, research in background",
         config.PAPER_POLL_SECONDS,
-        config.RESEARCH_EVERY_HOURS,
+        config.LIVE_EXIT_ENABLED,
     )
     while True:
         try:
             schedule.run_pending()
-            job_paper_tick(notifier, memory)
+            worker.poll(notifier)
+            if config.LIVE_EXIT_ENABLED:
+                job_live_watch(notifier, memory)
+            if candle_due():
+                job_paper_tick(notifier, memory)
+            reason = research_reason(worker)
+            if reason:
+                worker.start(reason)
         except Exception as exc:  # noqa: BLE001
             logger.error("main loop error: %s", exc)
             notifier.notify_error("main_loop", str(exc))

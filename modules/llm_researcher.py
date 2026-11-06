@@ -182,6 +182,7 @@ def propose_specs(
     research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
     starvation: dict | None = None,
+    learning: dict | None = None,
 ) -> list[dict]:
     """LLM proposes Strategy Specs from indicator catalog (PnL-first, no forever-flat)."""
     if not config.LLM_RESEARCH_ENABLED:
@@ -191,10 +192,16 @@ def propose_specs(
 
     ctx = _load_research_context()
     starve = starvation or {}
+    learning = learning or {}
     prompt = {
         "task": (
             "MISSION: positive expectancy / PnL after fees on BTCUSDT paper. "
             "Propose Strategy Specs by COMBINING catalog indicators (classic methods OK). "
+            "LEARN FROM HISTORY: research_memory lists Specs already evaluated out-of-sample "
+            "(best and worst) and real paper results; do NOT re-propose the worst ones or "
+            "near-copies, build on indicators that qualified. recent_trades show the "
+            "indicator values and regime at entry for real paper trades — use the "
+            "win/loss patterns (e.g. losers cluster in range regime → add a trend filter). "
             "Do NOT recommend standing aside forever or HOLD-only strategies. "
             "If starving (chronic SKIP), propose LOOSER filters and alternate indicators "
             "so the system can take learnable trades. JSON only."
@@ -203,6 +210,9 @@ def propose_specs(
         "market_summary": market_summary,
         "research_focus": research_focus or [],
         "starvation": starve,
+        "research_memory": learning.get("research_memory") or "",
+        "lessons": learning.get("lessons") or "",
+        "recent_trades": learning.get("recent_trades") or [],
         "market_notes": ctx["combined"],
         "tick_history": (tick_history_text or "")[: config.TICK_HISTORY_PROMPT_MAX_CHARS],
         "catalog": catalog_for_prompt(),
@@ -240,16 +250,26 @@ def propose_specs(
                         "atr_stop": 1.5,
                         "reward_r": 2.0,
                         "leverage": 2,
+                        "breakeven_r": 1.0,
+                        "trail_atr": 0,
+                        "max_bars": 0,
+                        "exit_on_opposite": False,
                     },
                     "mtf_filter": False,
                 }
             ]
         },
+        "exit_options": (
+            "optional exit keys (0/false = off): breakeven_r = move SL to entry after +xR; "
+            "trail_atr = trailing stop at close - k*ATR; max_bars = close after N 15m bars; "
+            "exit_on_opposite = close when the opposite entry fires"
+        ),
         "requirements": [
             "only catalog indicators and allowed params",
             "each spec needs entry_long and/or entry_short",
             "prefer interpretable classic setups (trend, pullback, breakout, mean-revert)",
             "never propose empty entries or no-trade philosophies",
+            "keep each side to <= 4 conditions including filters (complexity is penalised)",
         ],
     }
     obj = _llm_chat(
@@ -280,22 +300,29 @@ def propose_spec_patch(
     *,
     paper_stats: dict | None = None,
     tick_history_text: str | None = None,
+    learning: dict | None = None,
 ) -> list[dict]:
     """Propose at most small patches (tune/add/remove one indicator condition)."""
     if not config.LLM_RESEARCH_ENABLED:
         return []
     from modules.indicator_catalog import catalog_for_prompt
 
+    learning = learning or {}
     prompt = {
         "task": (
             "MISSION: improve paper PnL/expectancy. "
             "Given current Strategy Spec and paper stats, propose up to 3 patches. "
             "Each patch changes ONE condition: action=tune|add|remove on "
             "target=entry_long|entry_short|filters. "
+            "Base every patch on evidence: compare indicator values and regime at entry "
+            "for winners vs losers in recent_trades, and explain the pattern in reason. "
             "Do NOT suggest stopping trading. JSON only."
         ),
         "current_spec": current_spec,
         "paper_stats": paper_stats or {},
+        "recent_trades": learning.get("recent_trades") or [],
+        "lessons": learning.get("lessons") or "",
+        "research_memory": learning.get("research_memory") or "",
         "tick_history": (tick_history_text or "")[:1200],
         "catalog": catalog_for_prompt(),
         "output_schema": {
@@ -370,15 +397,16 @@ def review_research_report(report_lite: dict) -> dict[str, Any]:
 def post_mortem_paper_trade(
     trade: dict,
     *,
-    genome: dict | None = None,
-    recent_bars_summary: dict | None = None,
+    spec: dict | None = None,
+    recent_trades: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """Analyze one closed paper trade; may set decay_signal + challenger_hints."""
+    """Analyze one closed paper trade; may set decay_signal + research_hints."""
     default = {
         "classification": "INSUFFICIENT_EVIDENCE",
         "lesson": "",
+        "actionable_rule": "",
         "decay_signal": False,
-        "challenger_hints": [],
+        "research_hints": [],
     }
     if not config.LLM_RESEARCH_ENABLED or not config.LLM_API_KEY:
         pnl = float(trade.get("pnl") or 0)
@@ -388,33 +416,34 @@ def post_mortem_paper_trade(
 
     from modules import tick_history
 
+    slim = {
+        k: trade.get(k)
+        for k in (
+            "side", "entry", "exit", "entry_time", "exit_time", "exit_reason", "exit_source",
+            "pnl", "r_multiple", "bars_held", "leverage", "sl", "initial_sl", "tp",
+            "entry_context", "family",
+        )
+    }
     prompt = {
         "task": (
-            "Post-mortem a PAPER BTCUSDT trade from a Champion genome. "
-            "Classify outcome, write a short lesson, say if strategy may be decaying, "
-            "and optionally propose challenger genome parameter hints "
-            "(must use allowed genome fields only). "
-            "tick_history is research context only — not entry authority. JSON only."
+            "Post-mortem a PAPER BTCUSDT trade taken by the Champion Strategy Spec. "
+            "entry_context has the indicator values and market regime when the signal fired. "
+            "Compare with recent_trades (same structure) to find a pattern. "
+            "Classify outcome, write a short lesson, an actionable_rule phrased as an "
+            "indicator condition (e.g. 'add adx(14) >= 22 filter for LONG'), say if the "
+            "strategy may be decaying, and give up to 3 short research_hints for the next "
+            "Spec search. tick_history is context only. JSON only."
         ),
-        "trade": trade,
-        "genome": genome,
-        "market": recent_bars_summary or {},
+        "trade": slim,
+        "spec": spec,
+        "recent_trades": recent_trades or [],
         "tick_history": tick_history.format_for_prompt(),
-        "allowed_families": list(FAMILIES),
         "output_schema": {
             "classification": "GOOD_EDGE|VALID_LOSS|BAD_SETUP|PROCESS_ERROR|INSUFFICIENT_EVIDENCE",
             "lesson": "string Vietnamese or English",
+            "actionable_rule": "string",
             "decay_signal": False,
-            "challenger_hints": [
-                {
-                    "family": "trend_cross",
-                    "fast": 12,
-                    "slow": 50,
-                    "atr_stop": 2.0,
-                    "reward_r": 2.0,
-                    "leverage": 2,
-                }
-            ],
+            "research_hints": ["string"],
         },
     }
     obj = _llm_chat(
@@ -424,19 +453,12 @@ def post_mortem_paper_trade(
     )
     if not isinstance(obj, dict):
         return default
-    hints_raw = obj.get("challenger_hints") or []
-    hints: list[dict] = []
-    for h in hints_raw[:5]:
-        if isinstance(h, dict):
-            g = genome_from_dict(h)
-            if g:
-                from dataclasses import asdict
-
-                hints.append(asdict(g))
+    hints = [str(h)[:200] for h in (obj.get("research_hints") or [])[:3] if h]
     cls = str(obj.get("classification") or "INSUFFICIENT_EVIDENCE").upper()
     return {
         "classification": cls,
         "lesson": str(obj.get("lesson") or "")[:800],
+        "actionable_rule": str(obj.get("actionable_rule") or "")[:300],
         "decay_signal": bool(obj.get("decay_signal")),
-        "challenger_hints": hints,
+        "research_hints": hints,
     }

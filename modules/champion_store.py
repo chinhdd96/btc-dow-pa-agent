@@ -69,6 +69,31 @@ def save_research(report: dict, path: str | None = None) -> None:
                 json.dumps(report, default=str),
             ),
         )
+        con.execute(
+            "DELETE FROM research_runs WHERE id NOT IN "
+            "(SELECT id FROM research_runs ORDER BY id DESC LIMIT ?)",
+            (config.RESEARCH_RUNS_KEEP,),
+        )
+
+
+def list_research_runs(limit: int = 10, path: str | None = None) -> list[dict]:
+    """Newest-first research reports."""
+    db = path or _db_path()
+    init_db(db)
+    with sqlite3.connect(db) as con:
+        rows = con.execute(
+            "SELECT ts, payload FROM research_runs ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    out: list[dict] = []
+    for ts, payload in rows:
+        try:
+            item = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        item.setdefault("created_utc", ts)
+        out.append(item)
+    return out
 
 
 def insert_paper_trade(trade: dict, path: str | None = None) -> None:

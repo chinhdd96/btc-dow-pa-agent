@@ -82,6 +82,20 @@ python scripts/run_research.py --no-llm --days 180 --generations 2 --population 
 `SPEC_PATCH_MIN_TRADES=12`, `SPEC_REPLACE_MIN_TRADES=20`, cooldown 6h, tối đa ~1 research/24h ceiling.
 Flat tạm chỉ khi chưa có Spec compile được — research vẫn chạy (PnL-first).
 
+### Vòng lặp chính (mỗi 20s)
+
+1. Research xong (chạy nền) → main thread áp dụng Champion/shadow, gửi Telegram.
+2. Live watch: có pending → khớp ở giá mở nến kế tiếp (nến 1m đầu); có lệnh → kiểm SL/TP/LIQ bằng high/low nến 1m (1 request nhẹ).
+3. Có nến 15m mới đóng → tải đủ dữ liệu, xử lý Champion + shadow (warm-up 1000 nến, giống backtest), trailing/hòa vốn/time-stop cập nhật ở nến đóng.
+4. Cần research (chưa có Spec / research_due / quá 24h) → chạy nền tối đa 15 phút; lỗi thì chờ 30 phút mới thử lại.
+
+### Học và chọn Spec
+
+- LLM nhận: lịch sử research (Spec tốt/tệ, chỉ báo nào hay đạt chuẩn, kết quả paper thật), bài học sau lệnh, 20 lệnh gần nhất kèm giá trị chỉ báo + regime lúc vào lệnh.
+- Đánh giá walk-forward 4 đoạn sau train; đạt chuẩn khi ≥3/4 đoạn có lời, PF > 1.05; phạt Spec quá nhiều điều kiện.
+- Shadow: tối đa 3 Spec ứng viên chạy paper ảo; shadow có ≥8 lệnh lời hơn Champion cùng khoảng thời gian được ưu tiên khi research.
+- Exit tùy chọn trong Spec: `breakeven_r`, `trail_atr`, `max_bars`, `exit_on_opposite` — cùng một hàm cho backtest, paper và live.
+
 ---
 
 ## 4. Artifact
