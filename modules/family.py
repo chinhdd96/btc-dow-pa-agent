@@ -107,6 +107,43 @@ def record_version(
     return fam
 
 
+def _utc(x: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(x)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def hours_without_entry(state: dict, now: pd.Timestamp | None = None) -> float | None:
+    now = now or pd.Timestamp.now(tz="UTC")
+    refs = [state.get("last_entry_ts"), state.get("spec_since_ts")]
+    stamps = [_utc(x) for x in refs if x]
+    if not stamps:
+        return None
+    return (now - max(stamps)).total_seconds() / 3600
+
+
+def check_no_trade(state: dict, now: pd.Timestamp | None = None) -> float | None:
+    """Flag a no_trade review when the version has not entered for FAMILY_NO_TRADE_HOURS.
+
+    Returns the idle hours when it flagged, else None. Mutates state.
+    """
+    now = now or pd.Timestamp.now(tz="UTC")
+    if needs_genesis(state) or state.get("position") or state.get("pending") or state.get("research_due"):
+        return None
+    if not state.get("spec_since_ts"):
+        state["spec_since_ts"] = now.isoformat()
+        return None
+    idle = hours_without_entry(state, now)
+    last_flag = state.get("last_no_trade_ts")
+    since_flag = (now - _utc(last_flag)).total_seconds() / 3600 if last_flag else None
+    if idle is None or idle < config.FAMILY_NO_TRADE_HOURS:
+        return None
+    if since_flag is not None and since_flag < config.FAMILY_NO_TRADE_HOURS:
+        return None
+    state["research_due"], state["research_mode"] = True, "no_trade"
+    state["last_no_trade_ts"] = now.isoformat()
+    return idle
+
+
 def history_for_prompt(state: dict, limit: int = 10) -> list[dict[str, Any]]:
     """Version changelog with backtest + real paper results, so the LLM sees which edits helped."""
     fam = get(state)

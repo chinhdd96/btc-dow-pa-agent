@@ -53,6 +53,7 @@ def open_position(
     time: str,
     fill_fn: FillFn = slippage_fill,
     extra: Optional[dict[str, Any]] = None,
+    size_mult: float = 1.0,
 ) -> Optional[dict[str, Any]]:
     atr_stop = float(exit_cfg.get("atr_stop") or 2.0)
     reward_r = float(exit_cfg.get("reward_r") or 2.0)
@@ -60,7 +61,7 @@ def open_position(
     stop_dist = float(atr) * atr_stop
     if not np.isfinite(stop_dist) or stop_dist <= 0 or ref_open <= 0:
         return None
-    margin = equity * config.MAX_MARGIN_FRACTION
+    margin = equity * config.MAX_MARGIN_FRACTION * size_mult
     notional = margin * leverage
     qty = notional / ref_open
     entry, qty = fill_fn(side, qty, ref_open)

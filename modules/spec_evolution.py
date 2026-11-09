@@ -35,30 +35,55 @@ def _row(ranked: list[dict], spec: dict | None) -> dict | None:
     return next((r for r in ranked if r["spec_id"] == sid), None)
 
 
+def _leverage_cap() -> int:
+    allowed = [lv for lv in config.LEVERAGE_CANDIDATES if lv <= config.FAMILY_MAX_LEVERAGE]
+    return max(allowed) if allowed else min(config.LEVERAGE_CANDIDATES)
+
+
+def cap_leverage(spec: dict) -> dict:
+    s = normalize_spec(spec)
+    if int(s["exit"]["leverage"]) > _leverage_cap():
+        s["exit"]["leverage"] = _leverage_cap()
+    return s
+
+
+def oos_trades(row: dict | None) -> int:
+    return int(((row or {}).get("oos") or {}).get("trade_count") or 0)
+
+
 def choose_version(
     ranked: list[dict],
     current: dict | None,
     *,
     healthy_on_paper: bool,
     starving: bool = False,
+    min_trades: int = 0,
 ) -> tuple[dict | None, str]:
     """Pick the family version to run. Returns (spec, decision).
 
     decision: genesis | promote | keep | forward (better candidate must prove itself as a shadow).
+    min_trades > 0 (no_trade review): only candidates that trade at least that often out-of-sample.
     """
-    hard = [r for r in ranked if r["qualified"]]
-    soft = [r for r in ranked if r.get("soft_qualified") and not r["qualified"]]
+    rows = [r for r in ranked if oos_trades(r) >= min_trades] if min_trades else ranked
+    hard = [r for r in rows if r["qualified"]]
+    soft = [r for r in rows if r.get("soft_qualified") and not r["qualified"]]
     pool = hard or (soft if config.PAPER_SOFT_PROMOTE else [])
 
     if current is None:
         # PnL-first: genesis always yields a family; unqualified drafts run in explore mode
-        best = (pool or ranked or [None])[0]
+        best = (pool or rows or ranked or [None])[0]
         return (normalize_spec(best["spec"]), "genesis") if best else (None, "none")
 
+    cur_row = _row(ranked, current)
+    if not pool and min_trades and rows:
+        # A version that never trades cannot make PnL: switch to the best one that does (explore)
+        best = rows[0]
+        cur_score = float(cur_row["robust_score"]) if cur_row else float("-inf")
+        if best["spec_id"] != (cur_row or {}).get("spec_id") and best["robust_score"] > cur_score:
+            return normalize_spec(best["spec"]), "promote"
     if not pool:
         return normalize_spec(current), "keep"
     best = pool[0]
-    cur_row = _row(ranked, current)
     if cur_row and best["spec_id"] == cur_row["spec_id"]:
         return normalize_spec(current), "keep"
     cur_score = float(cur_row["robust_score"]) if cur_row else float("-inf")
@@ -90,7 +115,9 @@ def _mutate_spec(spec: dict, rng: random.Random) -> dict:
     if rng.random() < 0.4:
         s["exit"]["reward_r"] = rng.choice([1.2, 1.5, 1.8, 2.0, 2.5, 3.0, 4.0])
     if rng.random() < 0.3:
-        s["exit"]["leverage"] = rng.choice(list(config.LEVERAGE_CANDIDATES))
+        s["exit"]["leverage"] = rng.choice(
+            [lv for lv in config.LEVERAGE_CANDIDATES if lv <= _leverage_cap()]
+        )
     if rng.random() < 0.2:
         s["exit"]["breakeven_r"] = rng.choice([0, 0, 0.8, 1.0, 1.5])
     if rng.random() < 0.2:
@@ -125,10 +152,13 @@ class SpecEvolution:
         *,
         candidates: list[dict],
         current: dict | None = None,
+        deadline: float | None = None,
+        seed_offset: int = 0,
     ) -> None:
-        self.rng = random.Random(config.RESEARCH_RANDOM_SEED)
+        self.rng = random.Random(config.RESEARCH_RANDOM_SEED + seed_offset)
         self.candidates = candidates
         self.current = current
+        self.deadline = deadline
 
     def research(self, df: pd.DataFrame) -> list[dict]:
         population = list(self.candidates)
@@ -138,7 +168,7 @@ class SpecEvolution:
         uniq: dict[str, dict] = {}
         for raw in population:
             try:
-                s = normalize_spec(raw)
+                s = cap_leverage(raw)
             except Exception:  # noqa: BLE001
                 continue
             ok, msg = family_shape_ok(s)
@@ -161,7 +191,7 @@ class SpecEvolution:
         base = add_base_features(df)
         all_results: dict[str, dict] = {}
         n_gens = max(1, min(config.GENERATIONS, config.SPEC_MAX_GENERATIONS))
-        deadline = time.monotonic() + config.RESEARCH_MAX_MINUTES * 60
+        deadline = self.deadline or time.monotonic() + config.RESEARCH_MAX_MINUTES * 60
         for gen in range(n_gens):
             results = []
             for s in specs:

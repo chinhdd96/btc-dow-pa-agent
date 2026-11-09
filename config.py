@@ -276,6 +276,15 @@ FAMILY_VARIANTS = int(os.getenv("FAMILY_VARIANTS", "4"))
 FAMILY_DIRECT_MARGIN = float(os.getenv("FAMILY_DIRECT_MARGIN", "8"))
 FAMILY_REWORK_AFTER = int(os.getenv("FAMILY_REWORK_AFTER", "3"))
 FAMILY_HISTORY_KEEP = int(os.getenv("FAMILY_HISTORY_KEEP", "30"))
+# LLM sees how its candidates did and redesigns within the same research run
+FAMILY_FEEDBACK_ROUNDS = int(os.getenv("FAMILY_FEEDBACK_ROUNDS", "3"))
+# Unqualified (explore) version: research sooner, rework the core, smaller size
+FAMILY_EXPLORE_RESEARCH_HOURS = float(os.getenv("FAMILY_EXPLORE_RESEARCH_HOURS", "6"))
+FAMILY_EXPLORE_SIZE_MULT = float(os.getenv("FAMILY_EXPLORE_SIZE_MULT", "0.5"))
+FAMILY_MAX_LEVERAGE = int(os.getenv("FAMILY_MAX_LEVERAGE", "3"))
+# No entry for this long (flat, no pending) → review / retune the family
+FAMILY_NO_TRADE_HOURS = float(os.getenv("FAMILY_NO_TRADE_HOURS", "24"))
+FAMILY_NO_TRADE_MIN_MORE = float(os.getenv("FAMILY_NO_TRADE_MIN_MORE", "1.5"))
 RESEARCH_RANDOM_SEED = int(os.getenv("RESEARCH_RANDOM_SEED", "42"))
 LLM_RESEARCH_ENABLED = os.getenv("LLM_RESEARCH_ENABLED", "true").strip().lower() in {
     "1",

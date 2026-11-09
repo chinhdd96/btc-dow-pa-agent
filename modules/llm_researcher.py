@@ -90,6 +90,14 @@ _EXIT_OPTIONS = (
     "N 15m bars; exit_on_opposite = close when the opposite entry fires"
 )
 
+_FEEDBACK_RULE = (
+    "previous_attempts (if any) are candidates from THIS research run that already FAILED the "
+    "out-of-sample walk-forward test, with their metrics and verdict. Do not resubmit them or "
+    "near-copies; fix the failure: too_few_trades → looser thresholds or a trigger that fires "
+    "more often; losing / low profit factor → different trigger or regime filter; "
+    "high_drawdown → tighter stop, lower leverage, trend filter."
+)
+
 _SPEC_EXAMPLE = {
     "name": "trend_pullback",
     "entry_long": [
@@ -116,6 +124,7 @@ def propose_family_drafts(
     research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
     learning: dict | None = None,
+    feedback: list[dict] | None = None,
 ) -> list[dict]:
     """Genesis: drafts of the bot's single indicator family; walk-forward picks v1."""
     if not config.LLM_RESEARCH_ENABLED:
@@ -133,9 +142,12 @@ def propose_family_drafts(
             "mean-revert, order flow...) so out-of-sample testing can pick the best as v1. "
             "LEARN FROM HISTORY: research_memory lists Specs already evaluated out-of-sample and "
             "real paper results — build on indicators that qualified, avoid the worst ones. "
-            "Name each draft with a short snake_case family name. JSON only."
+            "Name each draft with a short snake_case family name. "
+            + _FEEDBACK_RULE
+            + " JSON only."
         ),
         "mission": "pnl_positive_priority_accept_controlled_risk",
+        "previous_attempts": feedback or [],
         "market_summary": market_summary,
         "research_focus": research_focus or [],
         "research_memory": learning.get("research_memory") or "",
@@ -183,6 +195,7 @@ def propose_family_changes(
     research_focus: list[str] | None = None,
     tick_history_text: str | None = None,
     learning: dict | None = None,
+    feedback: list[dict] | None = None,
 ) -> list[dict]:
     """Edits to the family. Returns [{"ops": [...], "reason": str}] — Python tests each one."""
     if not config.LLM_RESEARCH_ENABLED:
@@ -191,7 +204,16 @@ def propose_family_changes(
     from modules.strategy_spec import indicator_types
 
     learning = learning or {}
-    if mode == "rework":
+    if mode == "no_trade":
+        scope = (
+            "NO_TRADE: the current version has not entered a single trade for "
+            f"{(paper_stats or {}).get('hours_without_entry')}h on live candles — it is too strict "
+            "for the current market. Each variant may use up to 3 ops: loosen the thresholds that "
+            "block entries (see research_focus / tick_history skip reasons), remove or replace the "
+            "strictest filter, or replace the trigger with one that fires more often. A variant is "
+            "only accepted if it trades clearly more often out-of-sample while staying profitable."
+        )
+    elif mode == "rework":
         scope = (
             "REWORK: the current version keeps failing. Each variant may use up to 4 ops and may "
             "REPLACE the core entry trigger indicator, change the trend/volatility filters and exits."
@@ -209,9 +231,11 @@ def propose_family_changes(
             "how that version did (backtest + real paper) — repeat edits that helped, do not "
             "repeat edits that hurt. Compare indicator values and regime at entry for winners vs "
             "losers in recent_trades. Explain the evidence in reason. "
-            "Do NOT suggest stopping trading. JSON only."
+            + _FEEDBACK_RULE
+            + " Do NOT suggest stopping trading. JSON only."
         ),
         "mode": mode,
+        "previous_attempts": feedback or [],
         "current_spec": current_spec,
         "current_indicator_types": indicator_types(current_spec),
         "family_history": family_history or [],
@@ -248,7 +272,7 @@ def propose_family_changes(
         "You improve one indicator strategy family for better expectancy. "
         "Never recommend flat forever.",
         json.dumps(prompt, default=str),
-        temperature=0.6 if mode == "rework" else 0.5,
+        temperature=0.5 if mode == "patch" else 0.6,
     )
     if not isinstance(obj, dict):
         return []

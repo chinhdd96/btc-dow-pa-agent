@@ -140,9 +140,16 @@ def _notify_research(notifier: Notifier, report: dict, minutes: float) -> None:
         f"Family={fam.get('label') or 'NONE'} id={(ev or {}).get('spec_id') or report.get('champion_spec_id') or '—'}",
         f"mode={cfg.get('research_mode') or '—'} quyết định={decision} "
         f"nguồn={report.get('promote_source') or '—'} fail_streak={fam.get('fail_streak')}",
-        f"LLM ứng viên={cfg.get('llm_candidates')} | qualified top={sum(1 for c in top if c.get('qualified'))} | "
+        f"LLM ứng viên={cfg.get('llm_candidates')} ({cfg.get('feedback_rounds')} vòng) | "
+        + (f"cần ≥{cfg['min_oos_trades']} lệnh OOS | " if cfg.get("min_oos_trades") else "")
+        + f"qualified top={sum(1 for c in top if c.get('qualified'))} | "
         f"folds+={(ev or {}).get('positive_folds')}/{cfg.get('wf_folds')}",
     ]
+    if report.get("explore_mode"):
+        lines.append(
+            f"CHƯA ĐẠT CHUẨN → khám phá: size×{config.FAMILY_EXPLORE_SIZE_MULT}, "
+            f"research rework sau {config.FAMILY_EXPLORE_RESEARCH_HOURS:.0f}h"
+        )
     if decision in {"genesis", "promote"} and report.get("changes"):
         lines.append("THAY ĐỔI:")
         lines += [f"  {c}" for c in report["changes"][:8]]
@@ -179,7 +186,8 @@ def research_reason(worker: ResearchWorker) -> str | None:
         float(_load_runtime().get("last_research_ts") or 0),
         float(st.get("last_spec_research_ts") or 0),
     )
-    if time.time() - last_ts >= config.RESEARCH_EVERY_HOURS * 3600:
+    every = config.FAMILY_EXPLORE_RESEARCH_HOURS if st.get("explore_mode") else config.RESEARCH_EVERY_HOURS
+    if time.time() - last_ts >= every * 3600:
         return "stale"
     return None
 
@@ -342,6 +350,15 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
                 _handle_closed_trade(trade, trader, notifier, memory)
 
         st = champion_store.get_paper_state()
+        idle = family.check_no_trade(st)
+        if idle is not None:
+            champion_store.set_paper_state(st)
+            _backup("no_trade")
+            notifier.send(
+                f"KHÔNG VÀO LỆNH {idle:.0f}h ({family.label(st)})\n"
+                "→ research no_trade: nới / thay chỉ báo đang chặn, chọn bản vào lệnh nhiều hơn"
+            )
+            return
         diag = tick_history.maybe_flag_research_due(st)
         if diag and st.get("research_due"):
             champion_store.set_paper_state(st)
@@ -428,7 +445,9 @@ def main() -> None:
         f"Symbol={config.SYMBOL} interval={config.TIMEFRAME_MAIN} | poll {config.PAPER_POLL_SECONDS}s "
         f"(live SL/TP={'on' if config.LIVE_EXIT_ENABLED else 'off'})\n"
         f"Research nền: mỗi {config.RESEARCH_EVERY_HOURS:.0f}h hoặc khi cần | "
-        f"patch≥{config.SPEC_PATCH_MIN_TRADES} lệnh | rework sau {config.FAMILY_REWORK_AFTER} lần yếu | "
+        f"patch≥{config.SPEC_PATCH_MIN_TRADES} lệnh | rework sau {config.FAMILY_REWORK_AFTER} lần yếu "
+        f"(chưa đạt chuẩn: {config.FAMILY_EXPLORE_RESEARCH_HOURS:.0f}h, size×{config.FAMILY_EXPLORE_SIZE_MULT}) | "
+        f"không lệnh {config.FAMILY_NO_TRADE_HOURS:.0f}h → no_trade | "
         f"walk-forward {config.WF_FOLDS} fold\n"
         f"1 family {config.FAMILY_MIN_INDICATORS}-{config.FAMILY_MAX_INDICATORS} chỉ báo do LLM thiết kế"
         + (" — chưa có, sẽ tạo (genesis)" if family.needs_genesis(champion_store.get_paper_state()) else "")

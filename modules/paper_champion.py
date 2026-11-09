@@ -200,6 +200,11 @@ class PaperChampion:
             equity=float(self.state["equity"]),
             time=time_str,
             fill_fn=self._fill,
+            size_mult=(
+                config.FAMILY_EXPLORE_SIZE_MULT
+                if not self.shadow and self.state.get("explore_mode")
+                else 1.0
+            ),
             extra={
                 "genome_id": sid,
                 "spec_id": sid,
@@ -215,6 +220,7 @@ class PaperChampion:
             return False
         self.state["position"] = pos
         if not self.shadow:
+            self.state["last_entry_ts"] = pd.Timestamp(time_str).isoformat()
             logger.info(
                 "PAPER OPEN %s entry=%.2f lev=%sx SL=%.2f TP=%.2f spec=%s",
                 "LONG" if pos["side"] == 1 else "SHORT",
