@@ -87,7 +87,7 @@ Genesis cần LLM; nếu LLM lỗi thì giữ Champion cũ (hoặc flat nếu ch
 
 - **Vòng phản hồi:** trong 1 lần research, nếu chưa có bản đạt chuẩn, LLM thấy kết quả OOS của từng bản (lệnh, PF, win, DD, fold + verdict `too_few_trades` / `losing` / `high_drawdown`) rồi thiết kế lại — tối đa 3 vòng trong 15 phút.
 - **Version chưa đạt chuẩn (khám phá):** size ×0.5, research lại sau 6h ở chế độ rework.
-- **Đòn bẩy tối đa 3x** cho mọi version (version cũ cao hơn được hạ xuống và ghi thành version mới).
+- **Đòn bẩy tối đa 10x** (`FAMILY_MAX_LEVERAGE`, chọn trong 1/2/3/5/10) cho mọi version; version cao hơn được hạ xuống và ghi thành version mới.
 - **Không vào lệnh 24h** (không lệnh mở / chờ): research `no_trade` — LLM nới / thay chỉ báo đang chặn; chỉ chọn bản có số lệnh OOS ≥ 1.5× (và ≥ +5) bản hiện tại. Không có bản đạt chuẩn nào như vậy thì vẫn đổi sang bản vào lệnh nhiều hơn có điểm cao hơn (chế độ khám phá) — không đứng ngoài mãi.
 
 ### Vòng lặp chính (mỗi 20s)

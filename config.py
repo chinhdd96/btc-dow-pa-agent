@@ -281,7 +281,7 @@ FAMILY_FEEDBACK_ROUNDS = int(os.getenv("FAMILY_FEEDBACK_ROUNDS", "3"))
 # Unqualified (explore) version: research sooner, rework the core, smaller size
 FAMILY_EXPLORE_RESEARCH_HOURS = float(os.getenv("FAMILY_EXPLORE_RESEARCH_HOURS", "6"))
 FAMILY_EXPLORE_SIZE_MULT = float(os.getenv("FAMILY_EXPLORE_SIZE_MULT", "0.5"))
-FAMILY_MAX_LEVERAGE = int(os.getenv("FAMILY_MAX_LEVERAGE", "3"))
+FAMILY_MAX_LEVERAGE = int(os.getenv("FAMILY_MAX_LEVERAGE", "10"))
 # No entry for this long (flat, no pending) → review / retune the family
 FAMILY_NO_TRADE_HOURS = float(os.getenv("FAMILY_NO_TRADE_HOURS", "24"))
 FAMILY_NO_TRADE_MIN_MORE = float(os.getenv("FAMILY_NO_TRADE_MIN_MORE", "1.5"))
