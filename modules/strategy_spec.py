@@ -359,6 +359,52 @@ def exit_params(spec: dict[str, Any]) -> dict[str, Any]:
     return dict(s["exit"])
 
 
+def _fmt_num(v: float, ind: str = "") -> str:
+    if not np.isfinite(v):
+        return "?"
+    if ind == "atr_pct":
+        return f"{v * 100:.2f}%"
+    if abs(v) >= 100:
+        return f"{v:.1f}"
+    if abs(v) >= 10:
+        return f"{v:.2f}"
+    return f"{v:.4f}".rstrip("0").rstrip(".")
+
+
+def _cond_live(row: pd.Series, prev: pd.Series, cond: dict[str, Any]) -> str:
+    """One condition with live value, required rule, and ✓/✗."""
+    ok = "✓" if _eval_cond(row, prev, cond) else "✗"
+    ind = str(cond.get("ind") or "?")
+    params = dict(cond.get("params") or {})
+    op = str(cond.get("op") or "")
+    now = _series_val(row, ind, params if params else None)
+    was = _series_val(prev, ind, params if params else None)
+    vs = cond.get("vs")
+    if isinstance(vs, dict) and vs.get("ind"):
+        right = _series_val(row, str(vs["ind"]), dict(vs.get("params") or {}) or None)
+        live = f"{ind}={_fmt_num(now, ind)} vs {vs['ind']}={_fmt_num(right, str(vs['ind']))}"
+        if op in {"cross_up", "cross_down"}:
+            live += f" ({_fmt_num(was, ind)}→{_fmt_num(now, ind)})"
+        return f"{ok} {live} cần {op}"
+    thr = cond.get("value")
+    if op in {"cross_up", "cross_down"}:
+        return (
+            f"{ok} {ind}={_fmt_num(was, ind)}→{_fmt_num(now, ind)} cần {op} "
+            f"{_fmt_num(float(thr), ind) if thr is not None else '?'}"
+        )
+    if op == "between" and isinstance(thr, (list, tuple)) and len(thr) == 2:
+        return f"{ok} {ind}={_fmt_num(now, ind)} cần {thr[0]}–{thr[1]}"
+    if op in {"is_true", "is_false"}:
+        return f"{ok} {ind}={_fmt_num(now, ind)} cần {op}"
+    need = _fmt_num(float(thr), ind) if thr is not None else "?"
+    return f"{ok} {ind}={_fmt_num(now, ind)} cần {op} {need}"
+
+
+def _block_live(row: pd.Series, prev: pd.Series, conds: list, tag: str) -> str:
+    parts = [_cond_live(row, prev, c) for c in (conds or []) if isinstance(c, dict)]
+    return f"{tag}: " + " | ".join(parts) if parts else f"{tag}: (none)"
+
+
 def diagnose_spec_entry(
     row: pd.Series,
     prev: pd.Series,
@@ -369,27 +415,35 @@ def diagnose_spec_entry(
         fn = compile_signal(s)
     except ValueError as exc:
         return {"side": None, "action": "SKIP", "why": f"spec invalid: {exc}"}
+    live = "\n".join(
+        [
+            _block_live(row, prev, s.get("entry_long") or [], "LONG"),
+            _block_live(row, prev, s.get("entry_short") or [], "SHORT"),
+            _block_live(row, prev, s.get("filters") or [], "FILTER"),
+        ]
+    )
     if not _all_conds(row, prev, s.get("filters") or []):
-        return {"side": None, "action": "SKIP", "why": "filter chưa đạt"}
+        return {"side": None, "action": "SKIP", "why": "filter chưa đạt\n" + live}
     side = fn(row, prev)
     if side is None:
         long_raw = bool(s["entry_long"]) and _all_conds(row, prev, s["entry_long"])
         short_raw = bool(s["entry_short"]) and _all_conds(row, prev, s["entry_short"])
         if long_raw or short_raw:
+            extra = " (MTF chặn)" if s.get("mtf_filter") else " (LONG và SHORT cùng lúc)"
             return {
                 "side": None,
                 "action": "SKIP",
-                "why": "signal bị chặn MTF hoặc xung đột L/S",
+                "why": "signal bị chặn MTF hoặc xung đột L/S" + extra + "\n" + live,
             }
         return {
             "side": None,
             "action": "SKIP",
-            "why": f"spec={s.get('name')}: chưa đủ điều kiện setup",
+            "why": "chưa đủ điều kiện setup\n" + live,
         }
     return {
         "side": side,
         "action": "PENDING",
-        "why": f"spec {s.get('name')} signal {'LONG' if side == 1 else 'SHORT'} → chờ fill",
+        "why": f"{'LONG' if side == 1 else 'SHORT'} đủ điều kiện → chờ fill nến sau\n" + live,
     }
 
 

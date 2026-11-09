@@ -36,6 +36,14 @@ def classify_why(why: str) -> str:
         return "no_champion"
     if "warm-up" in w or "thiếu indicator" in w:
         return "warmup"
+    if "chưa đủ điều kiện setup" in w or "family=" in w:
+        return "setup"
+    if "filter chưa đạt" in w:
+        if "vol_ratio" in w and "✗ vol_ratio" in w:
+            return "volume_filter"
+        if "atr_pct" in w and "✗ atr_pct" in w:
+            return "max_atr"
+        return "setup"
     if "vol_ratio" in w or "volf" in w:
         return "volume_filter"
     if "atr%" in w or "max atr" in w or "maxatr" in w:
@@ -44,8 +52,6 @@ def classify_why(why: str) -> str:
         return "mtf"
     if "vol mode" in w:
         return "volatility_mode"
-    if "chưa đủ điều kiện setup" in w or "family=" in w:
-        return "setup"
     if "pending" in w or "chờ fill" in w:
         return "pending"
     if "đang long" in w or "đang short" in w or "chờ sl" in w:
@@ -101,7 +107,7 @@ def append(report: dict[str, Any]) -> dict[str, Any] | None:
     if not report:
         return None
     action = str(report.get("action") or "SKIP")
-    why = _one_line(str(report.get("why") or ""), 120)
+    why = _one_line(str(report.get("why") or ""), 400)
     reason = classify_why(why)
     candle = str(report.get("candle") or "")[-19:]
     close = report.get("close")

@@ -329,7 +329,7 @@ def job_paper_tick(notifier: Notifier, memory: MemoryManager) -> None:
                         if close is not None
                         else "close=—",
                         f"{action} · {report.get('family') or '—'}",
-                        str(report.get("why") or "")[:160],
+                        str(report.get("why") or "")[:900],
                     ]
                 )
             )
