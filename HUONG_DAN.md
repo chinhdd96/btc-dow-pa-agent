@@ -146,3 +146,35 @@ Volume `generated/` giữ SQLite research + playbook.
 
 `modules/llm_agent.py` (hourly decision), `hypothesis_store`, replay-on-start **không còn hot path**.
 `open_bracket` live bị hard-disable (`FORCE_PAPER_ONLY`).
+
+## 8. Portfolio paper trên Blitz Cloud
+
+Chọn nhánh release của repo trên Blitz, dùng Dockerfile ở root và bật chế độ background worker.
+Giữ thư mục `/data` ở mục Files của app. Dockerfile chạy bằng user `bot`, cần xác minh user đó
+ghi được vào thư mục persistent. Biến cấu hình đặt ở tab Environment:
+
+```dotenv
+SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,LINKUSDT,BNBUSDT,AVAXUSDT,XRPUSDT,ASTERUSDT,ADAUSDT,SUIUSDT,XPLUSDT
+PORTFOLIO_DATA_DIR=/data
+INITIAL_CAPITAL=1000
+REVIEW_EVERY_N_ENTRIES=10
+PORTFOLIO_INIT=true
+PAPER_MODE=true
+BINANCE_SSL_VERIFY=true
+```
+
+Thêm `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` và cấu hình Telegram tương ứng trong Environment.
+Đặt `RELEASE_SHA` bằng commit đã chọn nếu nền tảng không truyền build argument này.
+Free có giới hạn thời gian chạy nền khi tài khoản không hoạt động. Dùng chế độ always-on khi cần chạy 24/7.
+
+Trước cutover, tải snapshot của bot BTC cũ và xác nhận vị thế đang mở. Portfolio dùng DB mới
+`/data/portfolio.sqlite3` với vốn chung 1.000 USDT. Sau khi thấy startup đã tạo ví đúng và thư mục Files
+có DB, chuyển `PORTFOLIO_INIT=false`. Lần restart sau phải tải lại cùng ví, vị thế, Champion và bộ đếm.
+Nếu DB bị thiếu, agent dừng startup để có thể khôi phục đúng dữ liệu.
+
+Worker tạo `portfolio.backup.sqlite3` bằng SQLite Backup API mỗi giờ. Tải một bản ra khỏi app trước
+khi redeploy hoặc rollback. Để restore, dừng worker, giữ lại DB hiện tại và các file WAL/SHM, sau đó
+đặt bản backup đã xác minh thành `portfolio.sqlite3` trong `/data` và bật lại worker. Dùng cùng danh
+sách symbol, thứ tự, timeframe và chu kỳ review khi khôi phục. Kiểm tra commit, số entry và version
+Champion trong log Blitz sau lần start. Các lệnh mới dùng Champion đang hoạt động. Vị thế mở giữ Spec
+của lúc khớp. Toàn bộ lệnh đều mô phỏng.

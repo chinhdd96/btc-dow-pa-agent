@@ -211,9 +211,9 @@ def validate_spec(spec: dict[str, Any]) -> tuple[bool, str]:
 
 def _series_val(row: pd.Series, ind: str, params: dict | None) -> float:
     key = col_key(ind, params if params else None)
-    if key in row.index:
+    if key in row:
         v = row.get(key)
-    elif ind in row.index:
+    elif ind in row:
         v = row.get(ind)
     else:
         return float("nan")
@@ -315,12 +315,12 @@ def mtf_ok(row: pd.Series, side: int, enabled: bool) -> bool:
         return True
     biases: list[bool] = []
     for col in ("htf_1h_bull", "htf_4h_bull", "htf1_bull", "htf4_bull", "htf1d_bull"):
-        if col in row.index and pd.notna(row.get(col)):
+        if col in row and pd.notna(row.get(col)):
             biases.append(bool(row.get(col)))
     # also catalog keys
     for ind in ("htf_1h_bull", "htf_4h_bull"):
         k = col_key(ind, None)
-        if k in row.index and pd.notna(row.get(k)):
+        if k in row and pd.notna(row.get(k)):
             biases.append(bool(row.get(k)))
     if not biases:
         return False

@@ -1,10 +1,13 @@
 # BTC Dow/PA Mono-Agent — local/paper 24/7
 FROM python:3.12-slim-bookworm
+ARG RELEASE_SHA=unknown
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    TZ=UTC
+    TZ=UTC \
+    PORTFOLIO_DATA_DIR=/data \
+    RELEASE_SHA=${RELEASE_SHA}
 
 WORKDIR /app
 
@@ -19,7 +22,7 @@ RUN pip install --upgrade pip \
 
 COPY config.py main.py memory.json sources.json ./
 COPY modules/ ./modules/
-COPY generated/ ./generated/
+COPY generated/core_playbook.md generated/daily_playbook.md generated/context.json ./generated/
 COPY knowledge/ ./knowledge/
 COPY scripts/ ./scripts/
 
@@ -29,7 +32,9 @@ RUN mkdir -p /app/generated \
 
 # Non-root
 RUN useradd -m -u 10001 bot \
-    && chown -R bot:bot /app
+    && mkdir -p /data \
+    && chown -R bot:bot /app /data
+VOLUME ["/data"]
 USER bot
 
 CMD ["python", "main.py"]

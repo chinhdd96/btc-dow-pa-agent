@@ -491,4 +491,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if config.SYMBOLS:
+        from modules.portfolio_worker import run
+
+        run()
+    else:
+        main()

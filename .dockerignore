@@ -12,3 +12,14 @@ runtime_state.json
 .DS_Store
 HUONG_DAN.md
 knowledge/README.md
+**/*.sqlite3
+**/*.sqlite3-*
+generated/portfolio
+generated/history
+generated/archive
+generated/research
+generated/tick_history.jsonl
+generated/paper_account.json
+generated/decision_history.jsonl
+generated/hypotheses.json
+generated/adaptive_rules.json

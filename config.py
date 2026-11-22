@@ -8,6 +8,10 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 
 SYMBOL = "BTCUSDT"
+SYMBOLS = tuple(item.strip().upper() for item in os.getenv("SYMBOLS", "").split(",") if item.strip())
+REVIEW_EVERY_N_ENTRIES = int(os.getenv("REVIEW_EVERY_N_ENTRIES", "10"))
+PORTFOLIO_DATA_DIR = Path(os.getenv("PORTFOLIO_DATA_DIR", str(BASE_DIR / "generated" / "portfolio")))
+PORTFOLIO_INIT = os.getenv("PORTFOLIO_INIT", "false").strip().lower() in {"true", "yes", "1"}
 # Champion entry TF — 15m for faster paper signals; override via env if needed
 TIMEFRAME_MAIN = (os.getenv("TIMEFRAME_MAIN", "15m").strip() or "15m")
 TIMEFRAME_TREND = os.getenv("TIMEFRAME_TREND", "4h").strip() or "4h"

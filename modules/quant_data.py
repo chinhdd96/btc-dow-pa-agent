@@ -27,6 +27,7 @@ USER_AGENT = "BTC-Champion-Research-Agent/1.0"
 _session = requests.Session()
 _preferred_fapi: str | None = None
 _use_spot_klines = False
+_rate_limited_until = 0.0
 
 
 _thread_sessions = threading.local()
@@ -85,8 +86,10 @@ def _spot_klines(params: dict) -> object:
 
 def _get(path: str, params: dict | None = None, timeout: int = 25) -> object:
     """Public GET with multi-host Futures retry; klines may fall back to Spot."""
-    global _preferred_fapi, _use_spot_klines
+    global _preferred_fapi, _use_spot_klines, _rate_limited_until
     params = params or {}
+    if time.monotonic() < _rate_limited_until:
+        raise RuntimeError("Binance request cooldown active")
     if _use_spot_klines and path == "/fapi/v1/klines":
         return _spot_klines(params)
 
@@ -97,6 +100,11 @@ def _get(path: str, params: dict | None = None, timeout: int = 25) -> object:
     for base in bases:
         try:
             resp = _session_get(f"{base}{path}", params, timeout=timeout)
+            if resp.status_code in {418, 429}:
+                retry_after = resp.headers.get("Retry-After", "")
+                delay = int(retry_after) if retry_after.isdecimal() else 60
+                _rate_limited_until = max(_rate_limited_until, time.monotonic() + delay)
+                raise RuntimeError(f"Binance HTTP {resp.status_code}, retry in {delay}s")
             if resp.status_code == 403:
                 errors.append(f"{base}: 403")
                 continue
@@ -107,7 +115,7 @@ def _get(path: str, params: dict | None = None, timeout: int = 25) -> object:
             errors.append(f"{base}: {exc}")
             continue
 
-    if path == "/fapi/v1/klines":
+    if path == "/fapi/v1/klines" and not config.SYMBOLS:
         logger.warning(
             "Futures klines blocked (%s) — Spot data-api fallback",
             "; ".join(errors[-3:]) or "unknown",
@@ -122,10 +130,13 @@ def fetch_klines(
     interval: str,
     days: int,
     symbol: str | None = None,
+    *,
+    start_ms: int | None = None,
+    allow_empty: bool = False,
 ) -> pd.DataFrame:
     symbol = symbol or config.SYMBOL
     end_ms = int(time.time() * 1000)
-    start_ms = end_ms - days * 86400_000
+    start_ms = start_ms if start_ms is not None else end_ms - days * 86400_000
     rows: list = []
     # Spot data-api max 1000/page; Futures allows 1500
     page_limit = 1000 if _use_spot_klines else 1500
@@ -166,7 +177,7 @@ def fetch_klines(
         "ignore",
     ]
     df = pd.DataFrame(rows, columns=cols)
-    if df.empty:
+    if df.empty and not allow_empty:
         raise RuntimeError("Binance returned no candles")
     for c in ["open", "high", "low", "close", "volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -303,11 +314,13 @@ def enrich_derivatives_data(
     candles: pd.DataFrame,
     symbol: str | None = None,
     days: int = 730,
+    *,
+    funding_history: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     symbol = symbol or config.SYMBOL
     x = candles.sort_values("open_time").copy()
     try:
-        funding = fetch_funding_history(symbol, days)
+        funding = fetch_funding_history(symbol, days) if funding_history is None else funding_history
         if not funding.empty:
             x = x.merge(
                 funding, left_on="open_time", right_on="funding_time", how="left"
@@ -391,19 +404,24 @@ def enrich_multi_timeframe(
     candles: pd.DataFrame,
     symbol: str | None = None,
     days: int = 730,
+    *,
+    fetch_higher=None,
+    strict: bool = False,
 ) -> pd.DataFrame:
     symbol = symbol or config.SYMBOL
     x = candles.sort_values("open_time").copy()
     for interval, duration, prefix in _htf_enrich_stack():
         try:
-            higher = fetch_klines(interval, days, symbol)
+            fetch = fetch_higher or fetch_klines
+            warmup_days = days + max(1, int(np.ceil(60 * duration / pd.Timedelta(days=1))))
+            higher = fetch(interval, warmup_days, symbol).copy()
             higher["fast"] = higher.close.ewm(
                 span=20, adjust=False, min_periods=20
             ).mean()
             higher["slow"] = higher.close.ewm(
                 span=50, adjust=False, min_periods=50
             ).mean()
-            higher["bull"] = higher.fast > higher.slow
+            higher["bull"] = (higher.fast > higher.slow).where(higher.slow.notna())
             higher["available_at"] = higher.open_time + duration
             higher = higher[["available_at", "bull"]].dropna().sort_values("available_at")
             higher = higher.rename(columns={"bull": f"{prefix}_bull"})
@@ -416,6 +434,8 @@ def enrich_multi_timeframe(
             )
             x = x.drop(columns=["available_at"])
         except Exception as exc:
+            if strict:
+                raise
             logger.warning("%s context unavailable: %s", interval, exc)
             x[f"{prefix}_bull"] = np.nan
     return x.reset_index(drop=True)
