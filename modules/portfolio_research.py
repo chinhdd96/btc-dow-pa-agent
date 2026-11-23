@@ -190,7 +190,11 @@ def _review(report: dict) -> dict:
                          json.dumps(payload), temperature=0.2, timeout=45)
     if (not isinstance(response, dict) or not isinstance(response.get("summary"), str)
             or not isinstance(response.get("insufficient_evidence"), bool)):
-        raise RuntimeError("Portfolio review prompt failed or returned invalid JSON")
+        logger.warning("Portfolio LLM review unavailable or invalid; keeping the Python evaluation decision")
+        return {
+            "status": "unavailable", "summary": "", "insufficient_evidence": None,
+            "findings": [], "next_hypotheses": [],
+        }
     checked = {}
     for key in ("findings", "next_hypotheses"):
         checked[key] = []
@@ -202,6 +206,7 @@ def _review(report: dict) -> dict:
             if isinstance(refs, list) and refs and all(isinstance(x, str) and x in report["evidence"] for x in refs):
                 checked[key].append({"text": item["text"][:500], "evidence_refs": refs})
     return {
+        "status": "completed",
         "summary": str(response.get("summary") or "")[:800],
         "insufficient_evidence": response.get("insufficient_evidence") is True,
         **checked,
@@ -309,7 +314,9 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
         "validation_window": [str(validation[0]), str(validation[-1])],
         "holdout_window": [str(holdout[0]), str(holdout[-1])],
     }
-    report["review"] = _review(report)
+    logger.info("Portfolio evaluation entry=%d decision=%s reason=%s",
+                report["end_entry"], report["decision"], reason)
     if not selected and not current:
         raise RuntimeError(f"Portfolio genesis could not qualify a shared Spec: {reason}")
+    report["review"] = _review(report)
     return selected, report

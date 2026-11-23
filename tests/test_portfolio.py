@@ -125,6 +125,13 @@ class PortfolioTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["evidence_refs"], [])
 
+    def test_invalid_llm_review_is_advisory(self):
+        response = {"summary": "Missing required boolean"}
+        with patch.object(research, "_llm_chat", return_value=response):
+            review = research._review({"decision": "PROMOTE", "evidence": {}})
+        self.assertEqual(review["status"], "unavailable")
+        self.assertEqual(review["next_hypotheses"], [])
+
     def test_research_runs_holdout_after_candidate_selection(self):
         times = pd.date_range("2026-10-01", periods=1000, freq=interval_td(), tz="UTC")
         frame = pd.DataFrame({
@@ -135,10 +142,11 @@ class PortfolioTests(unittest.TestCase):
         with patch.object(research.MarketData, "frame", return_value=frame):
             with patch.object(research, "prepared", side_effect=lambda data, spec: data.set_index("open_time", drop=False)):
                 with patch.object(research, "_propose", return_value=[{"spec": SPEC}]):
-                    with patch.object(research, "_review", return_value={"summary": "fixture"}):
+                    with patch.object(research, "_llm_chat", return_value=None):
                         selected, report = research.research(new_state(("AAA", "BBB"), 1000), context)
         self.assertEqual(selected, SPEC)
         self.assertEqual(report["decision"], "PROMOTE")
+        self.assertEqual(report["review"]["status"], "unavailable")
         self.assertLess(report["validation_window"][-1], report["holdout_window"][0])
         self.assertEqual(set(report["evidence"]["holdout:challenger"]["symbols"]), {"AAA", "BBB"})
 
