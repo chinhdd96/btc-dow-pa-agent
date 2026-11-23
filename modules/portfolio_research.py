@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,7 @@ import pandas as pd
 import config
 from modules.features_catalog import ensure_features_for_spec
 from modules.indicator_catalog import catalog_for_prompt
-from modules.llm_researcher import _llm_chat
+from modules.llm_researcher import _SPEC_EXAMPLE, _llm_chat
 from modules.paper_champion import interval_td
 from modules.portfolio_data import MarketData, ms
 from modules.portfolio_engine import Portfolio, new_state
@@ -21,7 +22,7 @@ from modules.spec_evolution import cap_leverage
 from modules.strategy_spec import apply_ops, compile_signal, family_shape_ok, normalize_spec, spec_id
 
 logger = logging.getLogger(__name__)
-PROMPT_VERSION = "portfolio-v1"
+PROMPT_VERSION = "portfolio-v2"
 
 
 def _qualified(metrics: dict, minimum_trades: int) -> bool:
@@ -100,12 +101,18 @@ def _propose(symbols: tuple[str, ...], context: dict, current: dict | None, summ
             "Propose one shared indicator strategy for all portfolio symbols, with one shared wallet. "
             "Evaluate mechanisms across symbols and regimes and avoid relying on one coin. "
             "Reference supplied evidence IDs. Open entries are censored outcomes. "
-            "Genesis supplies complete Specs. Review supplies alternative patches of one or two ops. "
+            "Genesis supplies complete Specs even when there are no paper trades. "
+            "The example Spec shows the exact condition format. Use only IDs from allowed_evidence_refs. "
+            "Review supplies alternative patches of one or two ops. "
             "If review evidence is insufficient, return insufficient_evidence and no variants."
         ),
         "max_candidates": count,
         "symbols": symbols, "timeframe": config.TIMEFRAME_MAIN, "market": summary,
         "portfolio": context, "current_spec": current, "catalog": catalog_for_prompt(),
+        "allowed_evidence_refs": [
+            *(f"market:{symbol}" for symbol in symbols),
+            *(f"entry:{entry['entry_seq']}" for entry in context["entries"]),
+        ],
         "constraints": {
             "distinct_indicators": [config.FAMILY_MIN_INDICATORS, config.FAMILY_MAX_INDICATORS],
             "patch_actions": ["add", "remove", "replace", "tune", "exit", "mtf"],
@@ -115,10 +122,9 @@ def _propose(symbols: tuple[str, ...], context: dict, current: dict | None, summ
         "output": {
             "insufficient_evidence": False,
             "variants": [{
-                "hypothesis": "string", "evidence_refs": ["entry:1 or market:SYMBOL"],
+                "hypothesis": "string", "evidence_refs": [f"market:{symbols[0]}"],
                 "expected_effect": "measurable outcome",
-                "spec": {"name": "name", "entry_long": [], "entry_short": [], "filters": [],
-                         "mtf_filter": False, "exit": {"atr_stop": 2, "reward_r": 2, "leverage": 2}},
+                "spec": _SPEC_EXAMPLE,
                 "ops": [{"action": "tune", "target": "filters", "index": 0, "value": 20}],
             }],
         },
@@ -128,32 +134,43 @@ def _propose(symbols: tuple[str, ...], context: dict, current: dict | None, summ
     if (not isinstance(response, dict) or not isinstance(response.get("variants"), list)
             or not isinstance(response.get("insufficient_evidence"), bool)):
         raise RuntimeError("Portfolio candidate prompt failed or returned invalid JSON")
-    if response["insufficient_evidence"]:
+    if current and response["insufficient_evidence"]:
+        logger.info("Portfolio proposal: insufficient review evidence")
         return []
     found = {}
-    evidence = {f"market:{symbol}" for symbol in symbols}
-    evidence.update(f"entry:{entry['entry_seq']}" for entry in context["entries"])
+    rejected = Counter()
+    evidence = set(prompt["allowed_evidence_refs"])
     for item in response["variants"][:count]:
         if not isinstance(item, dict):
+            rejected["not_object"] += 1
             continue
         refs = item.get("evidence_refs")
-        if (not isinstance(refs, list) or not refs or
-                any(not isinstance(ref, str) or ref not in evidence for ref in refs)):
+        refs = [ref for ref in refs if isinstance(ref, str) and ref in evidence] if isinstance(refs, list) else []
+        if current and not refs:
+            rejected["missing_evidence"] += 1
             continue
-        if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("hypothesis", "expected_effect")):
+        annotations = {key: item[key].strip() for key in ("hypothesis", "expected_effect")
+                       if isinstance(item.get(key), str) and item[key].strip()}
+        if current and len(annotations) != 2:
+            rejected["missing_annotations"] += 1
             continue
         try:
             ops = item.get("ops")
             candidate = (apply_ops(current, ops) if isinstance(ops, list) and 1 <= len(ops) <= 2 else None
                          ) if current else normalize_spec(item["spec"])
-            if candidate and family_shape_ok(candidate)[0]:
+            valid, problem = family_shape_ok(candidate) if candidate else (False, "invalid_patch")
+            if valid:
                 candidate = cap_leverage(candidate)
                 found[spec_id(candidate)] = {
-                    "spec": candidate, "hypothesis": item["hypothesis"][:400],
-                    "evidence_refs": refs, "expected_effect": item["expected_effect"][:200],
+                    "spec": candidate, "hypothesis": annotations.get("hypothesis", "")[:400],
+                    "evidence_refs": refs, "expected_effect": annotations.get("expected_effect", "")[:200],
                 }
+            else:
+                rejected[problem.split(":", 1)[0]] += 1
         except (KeyError, TypeError, AttributeError, ValueError):
-            logger.info("Discarded malformed portfolio candidate")
+            rejected["malformed_spec"] += 1
+    logger.info("Portfolio proposals: received=%d valid=%d rejected=%s",
+                len(response["variants"]), len(found), dict(rejected))
     return list(found.values())
 
 
@@ -226,7 +243,11 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
     }
     candidates = _propose(symbols, proposal_context, current, summary)
     if not candidates and current is None:
-        raise RuntimeError("Portfolio genesis produced no valid Spec")
+        baseline = cap_leverage(_SPEC_EXAMPLE)
+        if not family_shape_ok(baseline)[0]:
+            raise RuntimeError("Portfolio genesis produced no valid Spec or compatible baseline")
+        logger.warning("No valid genesis proposal; evaluating the catalog baseline with the same holdout gate")
+        candidates = [{"spec": baseline, "hypothesis": "Catalog baseline", "evidence_refs": []}]
     if current:
         current_id = spec_id(current)
         candidates = [{"spec": current}] + [row for row in candidates if spec_id(row["spec"]) != current_id]

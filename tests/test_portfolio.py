@@ -117,6 +117,14 @@ class PortfolioTests(unittest.TestCase):
         self.assertTrue(report["insufficient_evidence"])
         self.assertEqual(len(report["findings"]), 1)
 
+    def test_genesis_keeps_valid_spec_without_paper_evidence(self):
+        candidate = {"spec": research._SPEC_EXAMPLE, "evidence_refs": ["entry:99"]}
+        response = {"variants": [candidate], "insufficient_evidence": True}
+        with patch.object(research, "_llm_chat", return_value=response):
+            result = research._propose(("AAA",), {"entries": []}, None, {"AAA": {"bars": 800}})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["evidence_refs"], [])
+
     def test_research_runs_holdout_after_candidate_selection(self):
         times = pd.date_range("2026-10-01", periods=1000, freq=interval_td(), tz="UTC")
         frame = pd.DataFrame({
