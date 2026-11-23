@@ -139,7 +139,7 @@ class PortfolioTests(unittest.TestCase):
             "close": 103.0, "atr": 1.0, "funding_event_rate": np.nan,
         })
         context = {"entries": [], "end_entry": 0, "markets": {}}
-        with patch.object(research.MarketData, "frame", return_value=frame):
+        with patch.object(research.MarketData, "frame", return_value=frame), patch.object(research, "_genesis_baselines", return_value=[]):
             with patch.object(research, "prepared", side_effect=lambda data, spec: data.set_index("open_time", drop=False)):
                 with patch.object(research, "_propose", return_value=[{"spec": SPEC}]):
                     with patch.object(research, "_llm_chat", return_value=None):
@@ -149,6 +149,19 @@ class PortfolioTests(unittest.TestCase):
         self.assertEqual(report["review"]["status"], "unavailable")
         self.assertLess(report["validation_window"][-1], report["holdout_window"][0])
         self.assertEqual(set(report["evidence"]["holdout:challenger"]["symbols"]), {"AAA", "BBB"})
+
+    def test_genesis_holdout_failure_returns_diagnostics(self):
+        stamps = pd.date_range("2026-10-01", periods=1000, freq=interval_td(), tz="UTC")
+        frame = pd.DataFrame({"open_time": stamps, "close": 100.0})
+        metrics = {"trade_count": 2, "net_return_pct": -0.1, "profit_factor": 0.8, "score": -5}
+        self.assertEqual(len(research._genesis_baselines()), 3)
+        with patch.object(research.MarketData, "frame", return_value=frame), patch.object(research, "_propose", return_value=[]):
+            with patch.object(research, "prepared"), patch.object(research, "simulate", return_value=metrics):
+                selected, report = research.research(new_state(("AAA",), 1000), {"entries": [], "end_entry": 0, "markets": {}})
+        self.assertIsNone(selected)
+        self.assertEqual(report["decision"], "DEFER")
+        self.assertEqual(report["evidence"]["holdout:challenger"], metrics)
+        self.assertEqual(len(report["evidence"]["validation"]), 3)
 
     def test_paper_tick_applies_simultaneous_opens_in_configured_order(self):
         state = new_state(("BBB", "AAA"), 1000)

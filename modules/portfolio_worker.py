@@ -188,7 +188,7 @@ def _run_loop(store: PortfolioStore, shutdown: threading.Event) -> None:
     messenger = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram")
     job: Future | None = None
     end_entry = 0
-    retry_after = 0.0
+    retry_after = time.monotonic() + max(0, store.state.get("genesis_retry_at", 0) - time.time())
     backup_at = time.monotonic()
 
     def notify(message):
@@ -205,7 +205,18 @@ def _run_loop(store: PortfolioStore, shutdown: threading.Event) -> None:
                 try:
                     selected, report = job.result()
                     state = deepcopy(store.state)
+                    if report["decision"] == "DEFER":
+                        delay = config.RESEARCH_RETRY_MINUTES * 60
+                        state["last_genesis_attempt"] = report
+                        state["genesis_retry_at"] = time.time() + delay
+                        store.save(state)
+                        retry_after = time.monotonic() + delay
+                        logger.info("Portfolio genesis deferred: %s, retry in %s minutes",
+                                    report["reason"], config.RESEARCH_RETRY_MINUTES)
+                        job = None
+                        continue
                     if selected:
+                        state.pop("genesis_retry_at", None)
                         state["version"] += 1
                         state["champion"] = selected
                         for market in state["markets"].values():

@@ -102,6 +102,7 @@ def _propose(symbols: tuple[str, ...], context: dict, current: dict | None, summ
             "Evaluate mechanisms across symbols and regimes and avoid relying on one coin. "
             "Reference supplied evidence IDs. Open entries are censored outcomes. "
             "Genesis supplies complete Specs even when there are no paper trades. "
+            "Provide distinct entry mechanisms. Use previous_genesis_validation to avoid repeating weak proposals. "
             "The example Spec shows the exact condition format. Use only IDs from allowed_evidence_refs. "
             "Review supplies alternative patches of one or two ops. "
             "If review evidence is insufficient, return insufficient_evidence and no variants."
@@ -213,6 +214,35 @@ def _review(report: dict) -> dict:
     }
 
 
+def _genesis_baselines() -> list[dict]:
+    def condition(ind, op, value, **params):
+        return {"ind": ind, "op": op, "value": value, "params": params}
+
+    profiles = (
+        _SPEC_EXAMPLE,
+        {
+            "name": "range_reversion",
+            "entry_long": [condition("bb_z", "cross_up", -1.5, period=20, std=2.0),
+                           condition("rsi", "lt", 50, period=14)],
+            "entry_short": [condition("bb_z", "cross_down", 1.5, period=20, std=2.0),
+                            condition("rsi", "gt", 50, period=14)],
+            "filters": [condition("adx", "lt", 23, period=14)],
+            "exit": {"atr_stop": 1.5, "reward_r": 1.5, "leverage": 2, "max_bars": 24},
+        },
+        {
+            "name": "momentum_breakout",
+            "entry_long": [condition("ret", "cross_up", 0.006, period=10),
+                           condition("dist_to_ema", "gt", 0, period=50)],
+            "entry_short": [condition("ret", "cross_down", -0.006, period=10),
+                            condition("dist_to_ema", "lt", 0, period=50)],
+            "filters": [condition("vol_ratio", "gt", 1.15, period=20)],
+            "exit": {"atr_stop": 2, "reward_r": 2, "leverage": 2, "max_bars": 32},
+        },
+    )
+    return [{"spec": cap_leverage(spec), "source": "catalog_baseline"}
+            for spec in profiles if family_shape_ok(spec)[0]]
+
+
 def research(state: dict, context: dict) -> tuple[dict | None, dict]:
     symbols = tuple(state["symbols"])
     current = state["champion"]
@@ -221,6 +251,15 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
     start = max(frame.open_time.iloc[0] for frame in frames.values())
     latest = min(frame.open_time.iloc[-1] for frame in frames.values())
     proposal_context = context
+    if current is None and (prior := state.get("last_genesis_attempt")):
+        rows = prior.get("evidence", {}).get("validation", [])
+        proposal_context = {
+            **context,
+            "previous_genesis_validation": [
+                {key: row.get(key) for key in ("id", "hypothesis", "source", "positive_folds", "trades", "score")}
+                for row in rows[:config.FAMILY_GENESIS_DRAFTS]
+            ],
+        }
     if context["entries"]:
         first_entry = min(item["entry_time"] for item in context["entries"])
         before_paper = pd.Timestamp(first_entry, unit="ms", tz="UTC") - 2 * interval_td()
@@ -247,12 +286,8 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
         for symbol, frame in frames.items()
     }
     candidates = _propose(symbols, proposal_context, current, summary)
-    if not candidates and current is None:
-        baseline = cap_leverage(_SPEC_EXAMPLE)
-        if not family_shape_ok(baseline)[0]:
-            raise RuntimeError("Portfolio genesis produced no valid Spec or compatible baseline")
-        logger.warning("No valid genesis proposal; evaluating the catalog baseline with the same holdout gate")
-        candidates = [{"spec": baseline, "hypothesis": "Catalog baseline", "evidence_refs": []}]
+    if current is None:
+        candidates = list({spec_id(row["spec"]): row for row in _genesis_baselines() + candidates}.values())
     if current:
         current_id = spec_id(current)
         candidates = [{"spec": current}] + [row for row in candidates if spec_id(row["spec"]) != current_id]
@@ -298,6 +333,9 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
         spec = finalist["spec"]
         challenger = simulate({s: prepared(f, spec) for s, f in frames.items()}, spec, holdout, deadline)
         evidence["holdout:challenger"] = challenger
+        logger.info("Portfolio holdout spec=%s trades=%d (min=%d) return=%+.3f%% (min > 0) PF=%.3f (min > 1.05)",
+                    finalist["id"], challenger["trade_count"], config.MIN_TEST_TRADES,
+                    challenger["net_return_pct"], challenger["profit_factor"])
         incumbent = None
         if current:
             incumbent = simulate({s: prepared(f, current) for s, f in frames.items()}, current, holdout, deadline)
@@ -309,7 +347,7 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
             reason = "holdout_gate_failed"
     report = {
         "end_entry": context["end_entry"], "prompt_version": PROMPT_VERSION, "model": config.LLM_MODEL,
-        "decision": "PROMOTE" if selected else "KEEP", "reason": reason,
+        "decision": "PROMOTE" if selected else ("KEEP" if current else "DEFER"), "reason": reason,
         "candidate_id": spec_id(selected) if selected else None, "evidence": evidence,
         "validation_window": [str(validation[0]), str(validation[-1])],
         "holdout_window": [str(holdout[0]), str(holdout[-1])],
@@ -317,6 +355,6 @@ def research(state: dict, context: dict) -> tuple[dict | None, dict]:
     logger.info("Portfolio evaluation entry=%d decision=%s reason=%s",
                 report["end_entry"], report["decision"], reason)
     if not selected and not current:
-        raise RuntimeError(f"Portfolio genesis could not qualify a shared Spec: {reason}")
+        return None, report
     report["review"] = _review(report)
     return selected, report
